@@ -19,10 +19,13 @@ export default function useConnectionDetails(appConfig: AppConfig) {
 
   const fetchConnectionDetails = useCallback(async () => {
     setConnectionDetails(null);
-    const url = new URL(
-      process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ?? '/api/connection-details',
-      window.location.origin
-    );
+    // Use connectionDetailsEndpoint from appConfig if available (for embedded usage)
+    // Otherwise fall back to env var or relative path
+    const endpoint =
+      appConfig.connectionDetailsEndpoint ??
+      process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ??
+      '/api/connection-details';
+    const url = new URL(endpoint, window.location.origin);
 
     let data: ConnectionDetails;
     try {
@@ -33,6 +36,7 @@ export default function useConnectionDetails(appConfig: AppConfig) {
           'X-Sandbox-Id': appConfig.sandboxId ?? '',
         },
         body: JSON.stringify({
+          agentId: appConfig.agentId,
           room_config: appConfig.agentName
             ? {
                 agents: [{ agent_name: appConfig.agentName }],
@@ -48,7 +52,7 @@ export default function useConnectionDetails(appConfig: AppConfig) {
 
     setConnectionDetails(data);
     return data;
-  }, []);
+  }, [appConfig.agentId, appConfig.agentName, appConfig.sandboxId, appConfig.connectionDetailsEndpoint]);
 
   useEffect(() => {
     fetchConnectionDetails();

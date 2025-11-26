@@ -1,12 +1,12 @@
 {
-  "name": "agent-starter-embed",
+  "name": "voice-agent-embed",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev --turbopack -p 3001",
     "build-embed-popup-script": "webpack",
     "build": "next build && pnpm build-embed-popup-script",
-    "start": "next start",
+    "start": "next start -p 3091",
     "lint": "next lint",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

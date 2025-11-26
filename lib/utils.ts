@@ -14,6 +14,7 @@ export function transcriptionToChatMessage(
   return {
     id: textStream.streamInfo.id,
     timestamp: textStream.streamInfo.timestamp,
+    type: 'chatMessage' as const,
     message: textStream.text,
     from:
       textStream.participantInfo.identity === room.localParticipant.identity

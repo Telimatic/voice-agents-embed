@@ -9,7 +9,9 @@ export type ThemeMode = 'dark' | 'light' | 'system';
 
 export interface AppConfig {
   sandboxId?: string;
+  agentId?: string;
   agentName?: string;
+  connectionDetailsEndpoint?: string;
 
   supportsChatInput: boolean;
   supportsVideoInput: boolean;

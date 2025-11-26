@@ -31,12 +31,20 @@ export async function POST(req: Request) {
 
     // Parse agent configuration from request body
     const body = await req.json();
+    const agentId: string = body?.agentId;
     const agentName: string = body?.room_config?.agents?.[0]?.agent_name;
 
     // Generate participant token
-    const participantName = 'user';
-    const participantIdentity = `voice_assistant_user_${Math.floor(Math.random() * 10_000)}`;
-    const roomName = `voice_assistant_room_${Math.floor(Math.random() * 10_000)}`;
+    const participantName = body?.participantName || 'Guest';
+    const participantIdentity = `embed_user_${Date.now()}_${Math.floor(Math.random() * 10_000)}`;
+
+    // Room name format: agent-{agentId}-{timestamp}-{random}
+    // This format is required for the LiveKit agent service to recognize and join the room
+    const timestamp = Date.now();
+    const randomSuffix = Math.random().toString(36).substring(2, 9);
+    const roomName = agentId
+      ? `agent-${agentId}-${timestamp}-${randomSuffix}`
+      : `voice_assistant_room_${timestamp}`;
 
     const participantToken = await createParticipantToken(
       { identity: participantIdentity, name: participantName },
@@ -51,8 +59,12 @@ export async function POST(req: Request) {
       participantToken: participantToken,
       participantName,
     };
+
     const headers = new Headers({
       'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Sandbox-Id',
     });
     return NextResponse.json(data, { headers });
   } catch (error) {
@@ -61,6 +73,17 @@ export async function POST(req: Request) {
       return new NextResponse(error.message, { status: 500 });
     }
   }
+}
+
+// Handle CORS preflight
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Sandbox-Id',
+    },
+  });
 }
 
 function createParticipantToken(

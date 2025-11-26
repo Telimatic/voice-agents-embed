@@ -142,7 +142,7 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
                 initial={{ opacity: 1 }}
                 animate={{ opacity: error === null ? 1 : 0 }}
                 transition={{
-                  type: 'linear',
+                  ease: 'linear',
                   duration: 0.2,
                 }}
                 disabled={!popupOpen}
