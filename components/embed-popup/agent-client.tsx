@@ -21,8 +21,7 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
   const room = useMemo(() => new Room(), []);
   const [popupOpen, setPopupOpen] = useState(false);
   const [error, setError] = useState<EmbedErrorDetails | null>(null);
-  const { connectionDetails, refreshConnectionDetails, existingOrRefreshConnectionDetails } =
-    useConnectionDetails(appConfig);
+  const { connectionDetails, refreshConnectionDetails } = useConnectionDetails(appConfig);
 
   const handleTogglePopup = () => {
     if (isAnimating.current) {
@@ -84,7 +83,8 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
         room.localParticipant.setMicrophoneEnabled(true, undefined, {
           preConnectBuffer: appConfig.isPreConnectBufferEnabled,
         }),
-        existingOrRefreshConnectionDetails().then((connectionDetails) =>
+        // Always fetch fresh connection details to ensure a new room is created
+        refreshConnectionDetails().then((connectionDetails) =>
           room.connect(connectionDetails.serverUrl, connectionDetails.participantToken)
         ),
       ]).catch((error) => {
@@ -103,7 +103,7 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
     room,
     popupOpen,
     connectionDetails,
-    existingOrRefreshConnectionDetails,
+    refreshConnectionDetails,
     appConfig.isPreConnectBufferEnabled,
   ]);
 
@@ -133,7 +133,7 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
         onAnimationComplete={handlePanelAnimationComplete}
         className="fixed right-4 bottom-20 left-4 z-50 md:left-auto"
       >
-        <div className="bg-bg1 dark:bg-bg2 border-separator1 dark:border-separator2 ml-auto h-[480px] w-full rounded-[28px] border border-solid drop-shadow-md md:w-[360px]">
+        <div className="bg-embed-bg border-separator1 dark:border-separator2 ml-auto h-[480px] w-full rounded-[28px] border border-solid drop-shadow-md md:w-[360px]">
           <div className="relative h-full w-full">
             <ErrorMessage error={error} />
             {!error && (

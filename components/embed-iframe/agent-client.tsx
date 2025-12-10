@@ -78,7 +78,7 @@ function EmbedAgentClient({ appConfig }: AppProps) {
   }, [room, sessionStarted, connectionDetails, appConfig.isPreConnectBufferEnabled]);
 
   return (
-    <div className="bg-background relative h-16 rounded-full border px-3">
+    <div className="bg-embed-bg relative h-16 rounded-full border px-3">
       <MotionWelcomeView
         key="welcome"
         onStartCall={() => setSessionStarted(true)}

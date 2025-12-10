@@ -1,6 +1,5 @@
 import { headers } from 'next/headers';
 import EmbedAgentClient from '@/components/embed-iframe/agent-client';
-import { ApplyThemeScript } from '@/components/embed-iframe/theme-provider';
 import { getAppConfig, getOrigin } from '@/lib/env';
 
 type SearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
@@ -18,10 +17,5 @@ export default async function Embed({ searchParams }: { searchParams: SearchPara
     appConfig.agentId = agentId;
   }
 
-  return (
-    <>
-      <ApplyThemeScript />
-      <EmbedAgentClient appConfig={appConfig} />
-    </>
-  );
+  return <EmbedAgentClient appConfig={appConfig} />;
 }

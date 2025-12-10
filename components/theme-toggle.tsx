@@ -7,22 +7,56 @@ import type { ThemeMode } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const THEME_SCRIPT = `
-  const doc = document.documentElement;
-  const theme = localStorage.getItem("${THEME_STORAGE_KEY}") ?? "system";
+  (function() {
+    var doc = document.documentElement;
+    var params = new URLSearchParams(window.location.search);
 
-  if (theme === "system") {
-    if (window.matchMedia("${THEME_MEDIA_QUERY}").matches) {
-      doc.classList.add("dark");
+    // URL params override localStorage
+    var urlTheme = params.get('theme');
+    var theme = urlTheme || localStorage.getItem("${THEME_STORAGE_KEY}") || "system";
+
+    var backgroundColor = params.get('backgroundColor');
+    var primaryColor = params.get('primaryColor');
+    var accentColor = params.get('accentColor');
+
+    // Apply theme class (light, dark, or system)
+    if (theme === "system") {
+      if (window.matchMedia("${THEME_MEDIA_QUERY}").matches) {
+        doc.classList.add("dark");
+      } else {
+        doc.classList.add("light");
+      }
     } else {
-      doc.classList.add("light");
+      doc.classList.add(theme);
     }
-  } else {
-    doc.classList.add(theme);
-  }
-`
-  .trim()
-  .replace(/\n/g, '')
-  .replace(/\s+/g, ' ');
+
+    // Apply custom backgroundColor if provided
+    if (backgroundColor) {
+      if (backgroundColor === 'transparent') {
+        doc.style.setProperty('--background', 'transparent');
+        doc.style.setProperty('--embed-bg', 'transparent');
+      } else {
+        var color = backgroundColor.charAt(0) === '#' ? backgroundColor : '#' + backgroundColor;
+        doc.style.setProperty('--background', color);
+        doc.style.setProperty('--embed-bg', color);
+      }
+    }
+
+    // Apply custom primaryColor if provided
+    if (primaryColor) {
+      var pColor = primaryColor.charAt(0) === '#' ? primaryColor : '#' + primaryColor;
+      doc.style.setProperty('--primary', pColor);
+      doc.style.setProperty('--primary-hover', pColor);
+    }
+
+    // Apply custom accentColor if provided
+    if (accentColor) {
+      var aColor = accentColor.charAt(0) === '#' ? accentColor : '#' + accentColor;
+      doc.style.setProperty('--accent', aColor);
+      doc.style.setProperty('--fgAccent', aColor);
+    }
+  })();
+`;
 
 function applyTheme(theme: ThemeMode) {
   const doc = document.documentElement;
@@ -42,7 +76,7 @@ function applyTheme(theme: ThemeMode) {
 }
 
 export function ApplyThemeScript() {
-  return <script id="theme-script">{THEME_SCRIPT}</script>;
+  return <script id="theme-script" dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />;
 }
 
 interface ThemeToggleProps {

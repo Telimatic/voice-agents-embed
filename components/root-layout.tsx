@@ -42,11 +42,14 @@ const commitMono = localFont({
 interface RootLayoutProps {
   children: React.ReactNode;
   className?: string;
+  headContent?: React.ReactNode;
 }
 
-export async function RootLayout({ children, className }: RootLayoutProps) {
+export async function RootLayout({ children, className, headContent }: RootLayoutProps) {
   return (
     <html lang="en" suppressHydrationWarning className={cn('scroll-smooth', className)}>
+      {/* eslint-disable-next-line @next/next/no-head-element */}
+      <head>{headContent}</head>
       <body
         className={cn(publicSans.variable, commitMono.variable, 'overflow-x-hidden antialiased')}
       >
