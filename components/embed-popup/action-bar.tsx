@@ -14,8 +14,7 @@ import { AppConfig } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 export interface AgentControlBarProps
-  extends React.HTMLAttributes<HTMLDivElement>,
-    UseAgentControlBarProps {
+  extends React.HTMLAttributes<HTMLDivElement>, UseAgentControlBarProps {
   capabilities: Pick<AppConfig, 'supportsChatInput' | 'supportsVideoInput' | 'supportsScreenShare'>;
   onChatOpenChange?: (open: boolean) => void;
   onSendMessage?: (message: string) => Promise<void>;
