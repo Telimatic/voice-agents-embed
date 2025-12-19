@@ -20,15 +20,16 @@ const THEME_SCRIPT = `
       doc.classList.add(theme);
     }
 
-    // Apply custom backgroundColor if provided
+    // Always set body/html background to transparent
+    doc.style.setProperty('--background', 'transparent');
+
+    // Apply custom embed widget background if provided, otherwise keep theme default
     if (backgroundColor) {
       if (backgroundColor === 'transparent') {
-        doc.style.setProperty('--background', 'transparent');
         doc.style.setProperty('--embed-bg', 'transparent');
       } else {
         // Handle hex colors (with or without #)
         var color = backgroundColor.charAt(0) === '#' ? backgroundColor : '#' + backgroundColor;
-        doc.style.setProperty('--background', color);
         doc.style.setProperty('--embed-bg', color);
       }
     }
