@@ -13,7 +13,11 @@ const THEME_SCRIPT = `
 
     // URL params override localStorage
     var urlTheme = params.get('theme');
-    var theme = urlTheme || localStorage.getItem("${THEME_STORAGE_KEY}") || "system";
+    var storedTheme = "system";
+    try {
+      storedTheme = localStorage.getItem("${THEME_STORAGE_KEY}") || "system";
+    } catch (e) {}
+    var theme = urlTheme || storedTheme;
 
     var backgroundColor = params.get('backgroundColor');
     var primaryColor = params.get('primaryColor');
@@ -59,10 +63,16 @@ const THEME_SCRIPT = `
 `;
 
 function applyTheme(theme: ThemeMode) {
+  if (typeof window === 'undefined') return;
+
   const doc = document.documentElement;
 
   doc.classList.remove('dark', 'light');
-  localStorage.setItem(THEME_STORAGE_KEY, theme);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // localStorage not available
+  }
 
   if (theme === 'system') {
     if (window.matchMedia(THEME_MEDIA_QUERY).matches) {
@@ -88,9 +98,12 @@ export function ThemeToggle({ className, onClick = () => {} }: ThemeToggleProps)
   const [theme, setTheme] = useState<ThemeMode | undefined>(undefined);
 
   useEffect(() => {
-    const storedTheme = (localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode) ?? 'system';
-
-    setTheme(storedTheme);
+    try {
+      const storedTheme = (localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode) ?? 'system';
+      setTheme(storedTheme);
+    } catch {
+      setTheme('system');
+    }
   }, []);
 
   function handleThemeChange(theme: ThemeMode) {

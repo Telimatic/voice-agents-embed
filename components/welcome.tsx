@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'motion/react';
 import { CheckIcon, CopyIcon, HandPointingIcon } from '@phosphor-icons/react';
@@ -18,8 +18,20 @@ export default function Welcome() {
   const tabParam = searchParams.get('tab');
   const selectedTab = tabParam ? (tabParam === 'popup' ? 'popup' : 'iframe') : 'iframe';
   const [, forceUpdate] = useState(0);
-  const theme = (localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode) ?? 'dark';
+  const [theme, setTheme] = useState<ThemeMode>('dark');
   const IS_SANDBOX_ENVIRONMENT = process.env.NODE_ENV === 'production';
+
+  // Load theme from localStorage on client side only
+  useEffect(() => {
+    try {
+      const storedTheme = localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode;
+      if (storedTheme) {
+        setTheme(storedTheme);
+      }
+    } catch {
+      // localStorage not available
+    }
+  }, []);
 
   const [copied, setCopied] = useState(false);
   const copyEmbedCode = useCallback((embedCode: string) => {
