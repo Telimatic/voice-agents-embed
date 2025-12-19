@@ -21,7 +21,7 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
   const room = useMemo(() => new Room(), []);
   const [popupOpen, setPopupOpen] = useState(false);
   const [error, setError] = useState<EmbedErrorDetails | null>(null);
-  const { connectionDetails, refreshConnectionDetails } = useConnectionDetails(appConfig);
+  const { refreshConnectionDetails } = useConnectionDetails(appConfig);
 
   const handleTogglePopup = () => {
     if (isAnimating.current) {
@@ -92,12 +92,7 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
     };
 
     connect();
-  }, [
-    room,
-    popupOpen,
-    refreshConnectionDetails,
-    appConfig.isPreConnectBufferEnabled,
-  ]);
+  }, [room, popupOpen, refreshConnectionDetails, appConfig.isPreConnectBufferEnabled]);
 
   return (
     <RoomContext.Provider value={room}>
