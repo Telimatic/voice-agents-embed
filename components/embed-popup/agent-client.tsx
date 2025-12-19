@@ -67,13 +67,6 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
     if (!popupOpen) {
       return;
     }
-    if (!connectionDetails) {
-      setError({
-        title: 'Error fetching connection details',
-        description: 'Please try again later',
-      });
-      return;
-    }
     if (room.state !== 'disconnected') {
       return;
     }
@@ -102,7 +95,6 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
   }, [
     room,
     popupOpen,
-    connectionDetails,
     refreshConnectionDetails,
     appConfig.isPreConnectBufferEnabled,
   ]);
