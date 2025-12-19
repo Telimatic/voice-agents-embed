@@ -1,5 +1,3 @@
-import { THEME_MEDIA_QUERY } from '@/lib/env';
-
 const THEME_SCRIPT = `
   (function() {
     var doc = document.documentElement;
@@ -9,16 +7,8 @@ const THEME_SCRIPT = `
     var primaryColor = params.get('primaryColor');
     var accentColor = params.get('accentColor');
 
-    // Apply theme class (light, dark, or system)
-    if (theme === "system") {
-      if (window.matchMedia("${THEME_MEDIA_QUERY}").matches) {
-        doc.classList.add("dark");
-      } else {
-        doc.classList.add("light");
-      }
-    } else {
-      doc.classList.add(theme);
-    }
+    // Apply theme class (light or dark only)
+    doc.classList.add(theme === 'light' ? 'light' : 'dark');
 
     // Always set body/html background to transparent
     doc.style.setProperty('--background', 'transparent');
