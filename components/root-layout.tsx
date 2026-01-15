@@ -4,8 +4,8 @@ import { cn } from '@/lib/utils';
 import '@/styles/globals.css';
 
 export const metadata = {
-  title: 'LiveKit Embeded Voice Agent',
-  description: 'LiveKit Embeded Voice Agent',
+  title: 'Voice Agent Embed',
+  description: 'Embeddable Voice Agent Widget',
 };
 
 const publicSans = Public_Sans({

@@ -16,7 +16,7 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const room = useRoomContext();
 
-  // Listen to LiveKit transcription events
+  // Listen to transcription events
   useEffect(() => {
     if (!room) return;
 

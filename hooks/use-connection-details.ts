@@ -10,10 +10,7 @@ export default function useConnectionDetails(appConfig: AppConfig) {
   //   - A random Room name
   //   - A random Participant name
   //   - An Access Token to permit the participant to join the room
-  //   - The URL of the LiveKit server to connect to
-  //
-  // In real-world application, you would likely allow the user to specify their
-  // own participant name, and possibly to choose from existing rooms to join.
+  //   - The URL of the server to connect to
 
   const [connectionDetails, setConnectionDetails] = useState<ConnectionDetails | null>(null);
 
@@ -52,7 +49,12 @@ export default function useConnectionDetails(appConfig: AppConfig) {
 
     setConnectionDetails(data);
     return data;
-  }, [appConfig.agentId, appConfig.agentName, appConfig.sandboxId, appConfig.connectionDetailsEndpoint]);
+  }, [
+    appConfig.agentId,
+    appConfig.agentName,
+    appConfig.sandboxId,
+    appConfig.connectionDetailsEndpoint,
+  ]);
 
   useEffect(() => {
     fetchConnectionDetails();

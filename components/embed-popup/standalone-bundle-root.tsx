@@ -4,11 +4,8 @@ import { getAppConfig } from '@/lib/env';
 import globalCss from '@/styles/globals.css';
 import EmbedFixedAgentClient from './agent-client';
 
-// Support both data-agent-id (voice-agents) and data-lk-sandbox-id (LiveKit sandbox)
-const scriptTag = document.querySelector<HTMLScriptElement>(
-  'script[data-agent-id], script[data-lk-sandbox-id]'
-);
-const agentIdAttribute = scriptTag?.dataset.agentId || scriptTag?.dataset.lkSandboxId;
+const scriptTag = document.querySelector<HTMLScriptElement>('script[data-agent-id]');
+const agentIdAttribute = scriptTag?.dataset.agentId;
 
 // Derive the API base URL from the script's src attribute
 const getScriptOrigin = (): string => {
