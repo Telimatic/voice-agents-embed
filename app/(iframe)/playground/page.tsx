@@ -19,8 +19,8 @@ export default async function Playground({ searchParams }: { searchParams: Searc
   }
 
   return (
-    <div className="w-full h-screen p-4">
-      <div className="w-full max-w-lg mx-auto h-full max-h-[600px]">
+    <div className="h-screen w-full p-4">
+      <div className="mx-auto h-full max-h-[600px] w-full max-w-lg">
         <PlaygroundAgentClient appConfig={appConfig} agentName={agentName} />
       </div>
     </div>

@@ -1,14 +1,14 @@
 'use client';
 
-import { useVoiceAssistant, useRoomContext, DisconnectButton } from '@livekit/components-react';
-import { RoomEvent } from 'livekit-client';
 import { useEffect, useRef, useState } from 'react';
+import { RoomEvent } from 'livekit-client';
+import { DisconnectButton, useRoomContext, useVoiceAssistant } from '@livekit/components-react';
 import { PhoneDisconnectIcon, SparkleIcon } from '@phosphor-icons/react';
+import { cn } from '@/lib/utils';
+import type { TranscriptMessage } from '@/types/playground';
 import { MicSelector } from './mic-selector';
 import { MicToggle } from './mic-toggle';
 import { StatusBadge } from './status-badge';
-import type { TranscriptMessage } from '@/types/playground';
-import { cn } from '@/lib/utils';
 
 export function PlaygroundInterface({ agentName }: { agentName?: string }) {
   const { state } = useVoiceAssistant();
@@ -59,14 +59,14 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
   }, [messages]);
 
   return (
-    <div className="w-full h-full bg-embed-bg rounded-2xl overflow-hidden flex flex-col border border-separator1">
+    <div className="bg-embed-bg border-separator1 flex h-full w-full flex-col overflow-hidden rounded-2xl border">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-separator1 flex items-center justify-between bg-bg1/50 z-10 shrink-0 gap-3">
-        <div className="flex items-center gap-3 min-w-0 flex-1 overflow-hidden">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-fgAccent to-primary flex items-center justify-center text-white text-xs font-bold shrink-0">
+      <div className="border-separator1 bg-bg1/50 z-10 flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+          <div className="from-fgAccent to-primary flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br text-xs font-bold text-white">
             AI
           </div>
-          <h2 className="font-bold text-fg0 text-sm truncate leading-tight">
+          <h2 className="text-fg0 truncate text-sm leading-tight font-bold">
             {agentName || 'Voice Agent'}
           </h2>
         </div>
@@ -77,15 +77,15 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
 
       {/* Transcript */}
       <div
-        className="flex-1 overflow-y-auto p-4 space-y-4 bg-bg1/30 scroll-smooth scrollbar-custom"
+        className="bg-bg1/30 scrollbar-custom flex-1 space-y-4 overflow-y-auto scroll-smooth p-4"
         ref={scrollRef}
       >
         {messages.length === 0 && (
-          <div className="h-full flex flex-col items-center justify-center text-fg4 gap-3 select-none opacity-80">
-            <div className="w-12 h-12 rounded-xl bg-bg2 border border-separator1 flex items-center justify-center">
+          <div className="text-fg4 flex h-full flex-col items-center justify-center gap-3 opacity-80 select-none">
+            <div className="bg-bg2 border-separator1 flex h-12 w-12 items-center justify-center rounded-xl border">
               <SparkleIcon size={20} weight="fill" className="text-fgAccent opacity-50" />
             </div>
-            <p className="text-xs font-medium text-fg3">Agent is ready to chat</p>
+            <p className="text-fg3 text-xs font-medium">Agent is ready to chat</p>
           </div>
         )}
 
@@ -93,13 +93,13 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
           <div
             key={msg.id}
             className={cn(
-              'flex gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300',
+              'animate-in fade-in slide-in-from-bottom-2 flex gap-3 duration-300',
               msg.speaker === 'user' ? 'flex-row-reverse' : ''
             )}
           >
             <div
               className={cn(
-                'w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 text-[9px] font-bold ring-1 ring-inset',
+                'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg text-[9px] font-bold ring-1 ring-inset',
                 msg.speaker === 'user'
                   ? 'bg-primary text-primary-foreground ring-primary/20'
                   : 'bg-bg2 text-fg1 ring-separator1'
@@ -109,13 +109,13 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
             </div>
             <div
               className={cn(
-                'flex flex-col gap-1 max-w-[85%]',
+                'flex max-w-[85%] flex-col gap-1',
                 msg.speaker === 'user' ? 'items-end' : 'items-start'
               )}
             >
               <div
                 className={cn(
-                  'px-3.5 py-2 rounded-xl text-sm leading-relaxed border',
+                  'rounded-xl border px-3.5 py-2 text-sm leading-relaxed',
                   msg.speaker === 'user'
                     ? 'bg-primary text-primary-foreground border-primary rounded-tr-sm'
                     : 'bg-bg2 text-fg1 border-separator1 rounded-tl-sm'
@@ -129,12 +129,12 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
       </div>
 
       {/* Footer controls */}
-      <div className="p-4 bg-bg1 border-t border-separator1 shrink-0 relative z-20">
-        <div className="flex items-center justify-center gap-3 w-full">
+      <div className="bg-bg1 border-separator1 relative z-20 shrink-0 border-t p-4">
+        <div className="flex w-full items-center justify-center gap-3">
           <MicToggle />
           <StatusBadge state={state} />
           <DisconnectButton>
-            <div className="px-4 py-2 bg-destructive hover:bg-destructive-hover text-destructive-foreground border border-destructive font-semibold rounded-full text-xs transition-all flex items-center gap-1.5 cursor-pointer h-9">
+            <div className="bg-destructive hover:bg-destructive-hover text-destructive-foreground border-destructive flex h-9 cursor-pointer items-center gap-1.5 rounded-full border px-4 py-2 text-xs font-semibold transition-all">
               <PhoneDisconnectIcon size={14} weight="bold" />
               <span>End Session</span>
             </div>

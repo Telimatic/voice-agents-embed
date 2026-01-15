@@ -2,16 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Room, RoomEvent } from 'livekit-client';
-import {
-  LiveKitRoom,
-  RoomAudioRenderer,
-  RoomContext,
-  StartAudio,
-} from '@livekit/components-react';
+import { RoomAudioRenderer, RoomContext, StartAudio } from '@livekit/components-react';
 import useConnectionDetails from '@/hooks/use-connection-details';
 import type { AppConfig, EmbedErrorDetails } from '@/lib/types';
-import { PlaygroundInterface } from './playground-interface';
 import { cn } from '@/lib/utils';
+import { PlaygroundInterface } from './playground-interface';
 
 interface PlaygroundAgentClientProps {
   appConfig: AppConfig;
@@ -90,8 +85,13 @@ export default function PlaygroundAgentClient({
 
   if (error) {
     return (
-      <div className={cn('w-full h-full bg-embed-bg rounded-2xl flex items-center justify-center p-6', className)}>
-        <div className="text-center space-y-2">
+      <div
+        className={cn(
+          'bg-embed-bg flex h-full w-full items-center justify-center rounded-2xl p-6',
+          className
+        )}
+      >
+        <div className="space-y-2 text-center">
           <p className="text-destructive-foreground font-semibold">{error.title}</p>
           <p className="text-fg3 text-sm">{error.description}</p>
           <button
@@ -99,7 +99,7 @@ export default function PlaygroundAgentClient({
               setError(null);
               room.disconnect();
             }}
-            className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-full text-sm font-medium hover:bg-primary-hover transition-colors"
+            className="bg-primary text-primary-foreground hover:bg-primary-hover mt-4 rounded-full px-4 py-2 text-sm font-medium transition-colors"
           >
             Try Again
           </button>
@@ -110,9 +110,14 @@ export default function PlaygroundAgentClient({
 
   if (!isConnected && isConnecting) {
     return (
-      <div className={cn('w-full h-full bg-embed-bg rounded-2xl flex items-center justify-center', className)}>
-        <div className="text-center space-y-3">
-          <div className="w-10 h-10 border-2 border-fgAccent border-t-transparent rounded-full animate-spin mx-auto" />
+      <div
+        className={cn(
+          'bg-embed-bg flex h-full w-full items-center justify-center rounded-2xl',
+          className
+        )}
+      >
+        <div className="space-y-3 text-center">
+          <div className="border-fgAccent mx-auto h-10 w-10 animate-spin rounded-full border-2 border-t-transparent" />
           <p className="text-fg2 text-sm font-medium">Connecting to agent...</p>
         </div>
       </div>
@@ -123,7 +128,7 @@ export default function PlaygroundAgentClient({
     <RoomContext.Provider value={room}>
       <RoomAudioRenderer />
       <StartAudio label="Start Audio" />
-      <div className={cn('w-full h-full', className)}>
+      <div className={cn('h-full w-full', className)}>
         <PlaygroundInterface agentName={agentName} />
       </div>
     </RoomContext.Provider>

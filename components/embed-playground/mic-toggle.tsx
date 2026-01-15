@@ -1,8 +1,8 @@
 'use client';
 
+import { useCallback, useEffect, useState } from 'react';
 import { useLocalParticipant } from '@livekit/components-react';
 import { MicrophoneIcon, MicrophoneSlashIcon } from '@phosphor-icons/react';
-import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 
 export function MicToggle() {
@@ -29,7 +29,7 @@ export function MicToggle() {
     <button
       onClick={toggleMic}
       className={cn(
-        'w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200 border',
+        'flex h-9 w-9 items-center justify-center rounded-full border transition-all duration-200',
         isMuted
           ? 'bg-destructive text-destructive-foreground border-destructive hover:bg-destructive-hover'
           : 'bg-bg2 text-fg1 border-separator1 hover:bg-bg3 hover:border-separator2'

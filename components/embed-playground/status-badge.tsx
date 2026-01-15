@@ -1,6 +1,6 @@
 'use client';
 
-import { AgentState } from '@livekit/components-react';
+import { type AgentState } from '@livekit/components-react';
 import { cn } from '@/lib/utils';
 
 export function StatusBadge({ state }: { state: AgentState }) {
@@ -34,19 +34,22 @@ export function StatusBadge({ state }: { state: AgentState }) {
   return (
     <div
       className={cn(
-        'flex items-center gap-2 px-3 py-1.5 rounded-full border text-[10px] font-bold uppercase tracking-wider transition-colors h-9',
+        'flex h-9 items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-bold tracking-wider uppercase transition-colors',
         colorClass
       )}
     >
       {showPing ? (
         <span className="relative flex h-1.5 w-1.5 shrink-0">
           <span
-            className={cn('animate-ping absolute inline-flex h-full w-full rounded-full opacity-75', dotColor)}
+            className={cn(
+              'absolute inline-flex h-full w-full animate-ping rounded-full opacity-75',
+              dotColor
+            )}
           />
-          <span className={cn('relative inline-flex rounded-full h-1.5 w-1.5', dotColor)} />
+          <span className={cn('relative inline-flex h-1.5 w-1.5 rounded-full', dotColor)} />
         </span>
       ) : (
-        <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotColor)} />
+        <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', dotColor)} />
       )}
       <span className="truncate">{displayState}</span>
     </div>
