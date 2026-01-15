@@ -41,7 +41,9 @@ export async function POST(req: Request) {
     // Room name format: agent-{agentId}-{timestamp}
     // This format is required for the LiveKit agent service to recognize and join the room
     const timestamp = Date.now();
-    const roomName = agentId ? `agent-${agentId}-${timestamp}` : `voice_assistant_room_${timestamp}`;
+    const roomName = agentId
+      ? `agent-${agentId}-${timestamp}`
+      : `voice_assistant_room_${timestamp}`;
 
     const participantToken = await createParticipantToken(
       { identity: participantIdentity, name: participantName },
