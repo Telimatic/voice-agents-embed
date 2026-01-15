@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Room, RoomEvent } from 'livekit-client';
 import { motion } from 'motion/react';
 import { RoomAudioRenderer, RoomContext, StartAudio } from '@livekit/components-react';
-import { XIcon } from '@phosphor-icons/react';
+import { PhoneIcon, XIcon } from '@phosphor-icons/react';
 import useConnectionDetails from '@/hooks/use-connection-details';
 import type { AppConfig, EmbedErrorDetails } from '@/lib/types';
 import { Button } from '../ui/button';
@@ -104,11 +104,8 @@ function EmbedAgentClient({ appConfig }: AppProps) {
         className="h-full w-full"
       >
         <div className="flex h-full items-center justify-between gap-1 gap-4 pl-3">
-          <div className="pl-3">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/lk-logo.svg" alt="LiveKit Logo" className="block size-6 dark:hidden" />
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/lk-logo-dark.svg" alt="LiveKit Logo" className="hidden size-6 dark:block" />
+          <div className="bg-destructive flex size-8 items-center justify-center rounded-full">
+            <PhoneIcon size={18} weight="fill" className="text-destructive-foreground" />
           </div>
 
           <div className="flex flex-col justify-center">

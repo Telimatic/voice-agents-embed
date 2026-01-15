@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { RoomEvent } from 'livekit-client';
 import { DisconnectButton, useRoomContext, useVoiceAssistant } from '@livekit/components-react';
-import { PhoneDisconnectIcon, SparkleIcon } from '@phosphor-icons/react';
+import { PhoneDisconnectIcon, PhoneIcon, SparkleIcon } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import type { TranscriptMessage } from '@/types/playground';
 import { MicSelector } from './mic-selector';
@@ -63,8 +63,8 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
       {/* Header */}
       <div className="border-separator1 bg-bg1/50 z-10 flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-          <div className="from-fgAccent to-primary flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br text-xs font-bold text-white">
-            AI
+          <div className="from-fgAccent to-primary flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br text-white">
+            <PhoneIcon size={16} weight="fill" />
           </div>
           <h2 className="text-fg0 truncate text-sm leading-tight font-bold">
             {agentName || 'Voice Agent'}
