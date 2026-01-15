@@ -38,10 +38,10 @@ export async function POST(req: Request) {
     const participantName = body?.participantName || 'Guest';
     const participantIdentity = `embed_user_${Date.now()}_${Math.floor(Math.random() * 10_000)}`;
 
-    // Room name format: playground-{agentId}
+    // Room name format: agent-{agentId}-{timestamp}
     // This format is required for the LiveKit agent service to recognize and join the room
     const timestamp = Date.now();
-    const roomName = agentId ? `playground-${agentId}` : `voice_assistant_room_${timestamp}`;
+    const roomName = agentId ? `agent-${agentId}-${timestamp}` : `voice_assistant_room_${timestamp}`;
 
     const participantToken = await createParticipantToken(
       { identity: participantIdentity, name: participantName },
