@@ -28,9 +28,15 @@ export default function PlaygroundAgentClient({
   const { refreshConnectionDetails } = useConnectionDetails(appConfig);
 
   useEffect(() => {
-    const onConnected = () => {
+    const onConnected = async () => {
       setIsConnected(true);
       setIsConnecting(false);
+      // Enable microphone after room is fully connected
+      try {
+        await room.localParticipant.setMicrophoneEnabled(true);
+      } catch (err) {
+        console.error('Error enabling microphone:', err);
+      }
     };
     const onDisconnected = () => {
       setIsConnected(false);
@@ -71,9 +77,7 @@ export default function PlaygroundAgentClient({
       try {
         const connectionDetails = await refreshConnectionDetails();
         await room.connect(connectionDetails.serverUrl, connectionDetails.participantToken);
-        await room.localParticipant.setMicrophoneEnabled(true, undefined, {
-          preConnectBuffer: appConfig.isPreConnectBufferEnabled,
-        });
+        // Don't auto-enable mic - let user enable via toggle button
       } catch (err) {
         console.error('Error connecting to agent:', err);
         setIsConnecting(false);
@@ -88,13 +92,7 @@ export default function PlaygroundAgentClient({
     };
 
     connect();
-  }, [
-    room,
-    sessionStarted,
-    refreshConnectionDetails,
-    appConfig.isPreConnectBufferEnabled,
-    isConnecting,
-  ]);
+  }, [room, sessionStarted, refreshConnectionDetails, isConnecting]);
 
   // Welcome screen - before session starts
   if (!sessionStarted && !error) {
