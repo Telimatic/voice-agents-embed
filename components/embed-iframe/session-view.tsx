@@ -124,6 +124,7 @@ export const SessionView = ({
                   <DeviceSelect
                     size="sm"
                     kind="audioinput"
+                    requestPermissions={false}
                     // onError={(error) =>
                     //   onDeviceError?.({ source: Track.Source.Microphone, error: error as Error })
                     // }
