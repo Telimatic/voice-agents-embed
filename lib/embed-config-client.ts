@@ -7,10 +7,29 @@
 // every web call's connection, and a screenshare outage must cost the feature, never the
 // conversation.
 import { createHmac } from 'crypto';
+import protocolFixture from '../fixtures/screenshare-protocol.fixture.json';
 import type { ShareSurface } from './screenshare-protocol';
 
 /** Short, because every web caller waits on it before the room connects. */
 const TIMEOUT_MS = 1_500;
+
+/** The protocol's own list of valid surfaces (fixtures/screenshare-protocol.fixture.json,
+ *  asserted against Task 12's screenshare-protocol.ts and the worker's Python mirror), not
+ *  redefined here. The signature on this request authenticates who sent these bytes, not
+ *  that the bytes are well-formed — the dashboard is a peer we trust for identity, not for
+ *  producing values this side has never validated. */
+const KNOWN_SURFACES: readonly string[] = protocolFixture.enums.shareSurface;
+
+/** Keeps only values this side actually recognizes as a ShareSurface. Anything else
+ *  (a typo, a future surface this widget build predates, a malformed response) is
+ *  dropped rather than cast through — an unvalidated string could otherwise reach a
+ *  getDisplayMedia-shaped API downstream. */
+function sanitizeAllowedSurfaces(value: unknown): ShareSurface[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter(
+    (v): v is ShareSurface => typeof v === 'string' && KNOWN_SURFACES.includes(v)
+  );
+}
 
 export interface WidgetScreenshareConfig {
   enabled: boolean;
@@ -74,7 +93,7 @@ export async function fetchScreenshareConfig(agentId: string): Promise<WidgetScr
     return {
       enabled: ss?.enabled === true,
       reason: typeof ss?.reason === 'string' ? ss.reason : 'unknown',
-      allowedSurfaces: ss?.config?.allowed_surfaces,
+      allowedSurfaces: sanitizeAllowedSurfaces(ss?.config?.allowed_surfaces),
     };
   } catch (err) {
     console.warn('screenshare config unavailable, continuing audio-only:', err);

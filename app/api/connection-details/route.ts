@@ -128,9 +128,15 @@ function createParticipantToken(
     // Enforcement at mint (spec D-5). usePublishPermissions already hides the share
     // control when SCREEN_SHARE is absent, so this is both the server-side guarantee and
     // the client-side gate, with no extra UI logic.
+    //
+    // CAMERA is included in both branches: this feature gates screenshare only. The base
+    // grant before TLZ-561 carried no canPublishSources at all, which LiveKit treats as
+    // "every source permitted" — omitting CAMERA here would silently take away camera
+    // publishing (gated by the unrelated supportsVideoInput/remote config) any time this
+    // code runs, which is not this task's job.
     canPublishSources: screenshare.enabled
-      ? [TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE]
-      : [TrackSource.MICROPHONE],
+      ? [TrackSource.CAMERA, TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE]
+      : [TrackSource.CAMERA, TrackSource.MICROPHONE],
   };
   at.addGrant(grant);
 

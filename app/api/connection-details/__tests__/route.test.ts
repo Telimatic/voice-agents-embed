@@ -124,14 +124,17 @@ describe('POST /api/connection-details — screenshare capability', () => {
     });
 
     const grant = decodeGrant(data.participantToken);
+    // CAMERA must survive alongside SCREEN_SHARE: this feature gates screenshare only,
+    // and must not narrow an unrelated capability that already worked.
     expect(grant.canPublishSources).toEqual([
+      trackSourceToString(TrackSource.CAMERA),
       trackSourceToString(TrackSource.MICROPHONE),
       trackSourceToString(TrackSource.SCREEN_SHARE),
     ]);
     expect(grant.canUpdateOwnMetadata).toBe(true);
   });
 
-  it('disabled: grant carries microphone only, capabilities.screenshare is false', async () => {
+  it('disabled: grant carries camera + microphone (no screen_share), capabilities.screenshare is false', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -150,7 +153,12 @@ describe('POST /api/connection-details — screenshare capability', () => {
     expect(data.capabilities.screenshare).toBe(false);
 
     const grant = decodeGrant(data.participantToken);
-    expect(grant.canPublishSources).toEqual([trackSourceToString(TrackSource.MICROPHONE)]);
+    // CAMERA must survive even though screenshare is off: only SCREEN_SHARE is gated.
+    expect(grant.canPublishSources).toEqual([
+      trackSourceToString(TrackSource.CAMERA),
+      trackSourceToString(TrackSource.MICROPHONE),
+    ]);
+    expect(grant.canPublishSources).not.toContain(trackSourceToString(TrackSource.SCREEN_SHARE));
     expect(grant.canUpdateOwnMetadata).toBe(true);
   });
 
@@ -168,7 +176,10 @@ describe('POST /api/connection-details — screenshare capability', () => {
     expect(typeof data.participantToken).toBe('string');
 
     const grant = decodeGrant(data.participantToken);
-    expect(grant.canPublishSources).toEqual([trackSourceToString(TrackSource.MICROPHONE)]);
+    expect(grant.canPublishSources).toEqual([
+      trackSourceToString(TrackSource.CAMERA),
+      trackSourceToString(TrackSource.MICROPHONE),
+    ]);
     expect(grant.canUpdateOwnMetadata).toBe(true);
 
     expect(warnSpy).toHaveBeenCalled();
@@ -205,8 +216,82 @@ describe('POST /api/connection-details — screenshare capability', () => {
     expect(data.capabilities.screenshare).toBe(false);
 
     const grant = decodeGrant(data.participantToken);
-    expect(grant.canPublishSources).toEqual([trackSourceToString(TrackSource.MICROPHONE)]);
+    expect(grant.canPublishSources).toEqual([
+      trackSourceToString(TrackSource.CAMERA),
+      trackSourceToString(TrackSource.MICROPHONE),
+    ]);
     expect(grant.canUpdateOwnMetadata).toBe(true);
+  });
+
+  it('missing agentId: audio-only, dashboard never called', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await POST(postRequest({}));
+    assertResponse(res);
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.capabilities.screenshare).toBe(false);
+
+    const grant = decodeGrant(data.participantToken);
+    expect(grant.canPublishSources).toEqual([
+      trackSourceToString(TrackSource.CAMERA),
+      trackSourceToString(TrackSource.MICROPHONE),
+    ]);
+    expect(grant.canUpdateOwnMetadata).toBe(true);
+
+    // No agentId to ask about means there is nothing to fetch: fail closed locally
+    // rather than making a request that could never succeed.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('dashboard returns non-OK (e.g. 401 after a key rotation): audio-only, 200', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: 'unauthorized' }, 401)));
+
+    const res = await POST(postRequest({ agentId: 'agent-1' }));
+    assertResponse(res);
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.capabilities.screenshare).toBe(false);
+
+    const grant = decodeGrant(data.participantToken);
+    expect(grant.canPublishSources).toEqual([
+      trackSourceToString(TrackSource.CAMERA),
+      trackSourceToString(TrackSource.MICROPHONE),
+    ]);
+    expect(grant.canUpdateOwnMetadata).toBe(true);
+  });
+
+  it('not_configured: DASHBOARD_EMBED_CONFIG_URL / EMBED_CONFIG_KEY_CURRENT unset (the state of every environment today), audio-only, dashboard never called', async () => {
+    const savedUrl = process.env.DASHBOARD_EMBED_CONFIG_URL;
+    const savedKey = process.env.EMBED_CONFIG_KEY_CURRENT;
+    delete process.env.DASHBOARD_EMBED_CONFIG_URL;
+    delete process.env.EMBED_CONFIG_KEY_CURRENT;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const res = await POST(postRequest({ agentId: 'agent-1' }));
+      assertResponse(res);
+
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.capabilities.screenshare).toBe(false);
+
+      const grant = decodeGrant(data.participantToken);
+      expect(grant.canPublishSources).toEqual([
+        trackSourceToString(TrackSource.CAMERA),
+        trackSourceToString(TrackSource.MICROPHONE),
+      ]);
+      expect(grant.canUpdateOwnMetadata).toBe(true);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      process.env.DASHBOARD_EMBED_CONFIG_URL = savedUrl;
+      process.env.EMBED_CONFIG_KEY_CURRENT = savedKey;
+    }
   });
 
   it('signs the outgoing request to the dashboard over the exact body sent', async () => {
@@ -228,6 +313,12 @@ describe('POST /api/connection-details — screenshare capability', () => {
     const timestampHeader = headers['x-embed-timestamp'];
     const signatureHeader = headers['x-embed-signature'];
     expect(timestampHeader).toMatch(/^\d+$/);
+    // Must be unix SECONDS, not milliseconds: the dashboard's 60-second skew window
+    // would reject every request sent in milliseconds (off by a factor of 1000), and a
+    // bare digit-string regex would not have noticed.
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    expect(Number(timestampHeader)).toBeGreaterThan(nowSeconds - 5);
+    expect(Number(timestampHeader)).toBeLessThan(nowSeconds + 5);
     expect(signatureHeader).toBeTruthy();
 
     const sentBody = init.body as string;
