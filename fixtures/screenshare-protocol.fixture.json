@@ -9,6 +9,7 @@
     "capable": "telzino.screenshare.capable",
     "enabled": "telzino.screenshare.enabled"
   },
+  "attributeValues": ["true", "false"],
   "enums": {
     "shareSurface": ["browser", "window", "monitor"],
     "consentResult": ["granted", "declined", "timeout", "cancelled", "failed", "unsupported"],

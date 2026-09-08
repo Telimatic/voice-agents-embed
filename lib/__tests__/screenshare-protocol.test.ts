@@ -42,6 +42,14 @@ describe('screenshare protocol constants match the shared fixture', () => {
     expect(ATTR_ENABLED).toBe(fixture.attributes.enabled);
   });
 
+  it('the attribute values are the stringified booleans the widget publishes', () => {
+    // The widget sets ATTR_CAPABLE with String(canCaptureDisplay()) and the worker sets
+    // ATTR_ENABLED with a Python string literal. LiveKit attributes are string-to-string,
+    // so both sides must agree on exactly these two spellings -- a `True` from Python or a
+    // boolean from JS would never match the other side's comparison.
+    expect(fixture.attributeValues).toEqual([String(true), String(false)]);
+  });
+
   it('every ConsentResult value appears in the fixture enum list', () => {
     for (const value of ALL_CONSENT_RESULTS) {
       expect(fixture.enums.consentResult).toContain(value);
