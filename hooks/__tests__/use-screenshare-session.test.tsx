@@ -46,27 +46,44 @@ function fakePublication(displaySurface: string | undefined, trackSid = 'TR_scre
     trackSid,
     source: Track.Source.ScreenShare,
     track: {
+      stop: vi.fn(),
       mediaStreamTrack: { getSettings: () => ({ displaySurface }) },
     },
   };
 }
 
+/**
+ * Behaves like the SDK in the two ways this hook depends on: `setScreenShareEnabled(false)`
+ * resolves to the publication it took down (or `undefined` when there was nothing to take
+ * down), and the unpublish event fires synchronously inside that call.
+ */
 function createFakeRoom() {
   const rpcHandlers = new Map<string, RpcHandler>();
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  let published: ReturnType<typeof fakePublication> | undefined;
+
   const setScreenShareEnabled = vi.fn(
     async (
       ...args: [enabled: boolean, options?: Record<string, unknown>]
     ): Promise<ReturnType<typeof fakePublication> | undefined> => {
-      void args;
-      return fakePublication('window');
+      if (args[0]) {
+        published = fakePublication('window');
+        return published;
+      }
+      const wasPublished = published;
+      published = undefined;
+      if (wasPublished) {
+        room.emit(RoomEvent.LocalTrackUnpublished, wasPublished);
+      }
+      return wasPublished;
     }
   );
+  const getTrackPublication = vi.fn(() => published);
   const setAttributes = vi.fn(async () => undefined);
 
   const room = {
     state: 'connected',
-    localParticipant: { setScreenShareEnabled, setAttributes },
+    localParticipant: { setScreenShareEnabled, setAttributes, getTrackPublication },
     registerRpcMethod: vi.fn((method: string, handler: RpcHandler) => {
       rpcHandlers.set(method, handler);
     }),
@@ -87,7 +104,38 @@ function createFakeRoom() {
     },
   };
 
-  return { room, rpcHandlers, setScreenShareEnabled, setAttributes };
+  return {
+    room,
+    rpcHandlers,
+    setScreenShareEnabled,
+    setAttributes,
+    getTrackPublication,
+    /** Mirrors the SDK: once the picker resolves, the publication exists on the participant. */
+    setPublished: (pub: ReturnType<typeof fakePublication> | undefined) => {
+      published = pub;
+    },
+  };
+}
+
+/**
+ * Hold the browser picker open. The promise stays unresolved until `release`, which is how
+ * every "something answered while the caller was still choosing" case is driven.
+ */
+function holdPicker(fake: ReturnType<typeof createFakeRoom>) {
+  let resolvePicker!: (pub: ReturnType<typeof fakePublication> | undefined) => void;
+  fake.setScreenShareEnabled.mockImplementationOnce(
+    () =>
+      new Promise<ReturnType<typeof fakePublication> | undefined>((resolve) => {
+        resolvePicker = resolve;
+      })
+  );
+  return {
+    release: (pub = fakePublication('monitor', 'TR_late')) => {
+      fake.setPublished(pub);
+      resolvePicker(pub);
+      return pub;
+    },
+  };
 }
 
 type FakeRoom = ReturnType<typeof createFakeRoom>['room'];
@@ -379,6 +427,24 @@ describe('useScreenshareSession', () => {
       await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
       expect(result.current.consentRequest?.timeoutSeconds).toBe(MAX_CONSENT_TIMEOUT_SECONDS);
     });
+
+    it('says so when it shortens the default window', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { room, rpcHandlers } = createFakeRoom();
+      const { result } = renderSession(room);
+
+      // No `timeout_seconds` at all. Comparing the raw field would compare NaN, and the
+      // default would be cut from 30s to 9s in silence.
+      invokeConsent(
+        rpcHandlers.get(RPC_REQUEST_CONSENT)!,
+        consentPayload({ timeout_seconds: undefined }),
+        10_000
+      );
+      await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
+
+      expect(result.current.consentRequest?.timeoutSeconds).toBe(9);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('shortened to 9s from 30s'));
+    });
   });
 
   describe('screenshare.stop', () => {
@@ -436,21 +502,31 @@ describe('useScreenshareSession', () => {
       expect(setScreenShareEnabled).toHaveBeenLastCalledWith(false);
       expect(hook.result.current.isSharing).toBe(false);
     });
+
+    it('reports a still-live track ahead of a bad version stamp', async () => {
+      const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+      const hook = renderSession(room);
+      await shareUntilGranted(rpcHandlers, hook);
+
+      setScreenShareEnabled.mockRejectedValueOnce(new Error('track is stuck'));
+      // A peer with both problems needs to know the screen is still being shared far
+      // more than it needs to know its version stamp was wrong.
+      await act(async () => {
+        await expect(
+          invokeStop(rpcHandlers.get(RPC_STOP)!, JSON.stringify({ v: 99 }))
+        ).rejects.toThrow(/could not be stopped/);
+      });
+      expect(hook.result.current.isSharing).toBe(true);
+    });
   });
 
   describe('no path leaves a live track the agent believes was cancelled', () => {
     it('tears the track down when the agent withdrew while the picker was open', async () => {
-      const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
-      let releasePicker!: (pub: ReturnType<typeof fakePublication> | undefined) => void;
-      setScreenShareEnabled.mockImplementationOnce(
-        () =>
-          new Promise<ReturnType<typeof fakePublication> | undefined>((resolve) => {
-            releasePicker = resolve;
-          })
-      );
-      const { result } = renderSession(room);
+      const fake = createFakeRoom();
+      const picker = holdPicker(fake);
+      const { result } = renderSession(fake.room);
 
-      const rpc = invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);
+      const rpc = invokeConsent(fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!);
       await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
 
       let accepting!: Promise<void>;
@@ -461,7 +537,7 @@ describe('useScreenshareSession', () => {
 
       // The agent gives up while the caller is still in the browser's picker.
       await act(async () => {
-        await invokeStop(rpcHandlers.get(RPC_STOP)!);
+        await invokeStop(fake.rpcHandlers.get(RPC_STOP)!);
       });
       const response = await parse(rpc);
       expect(response.result).toBe('failed');
@@ -469,27 +545,21 @@ describe('useScreenshareSession', () => {
 
       // ...and only now does the caller finish choosing, publishing a track.
       await act(async () => {
-        releasePicker(fakePublication('monitor', 'TR_late'));
+        picker.release();
         await accepting;
       });
 
       // The agent was told there is no share, so there must not be one.
-      expect(setScreenShareEnabled).toHaveBeenLastCalledWith(false);
+      expect(fake.setScreenShareEnabled).toHaveBeenLastCalledWith(false);
       expect(result.current.isSharing).toBe(false);
     });
 
     it('tears the track down when the panel closed while the picker was open', async () => {
-      const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
-      let releasePicker!: (pub: ReturnType<typeof fakePublication> | undefined) => void;
-      setScreenShareEnabled.mockImplementationOnce(
-        () =>
-          new Promise<ReturnType<typeof fakePublication> | undefined>((resolve) => {
-            releasePicker = resolve;
-          })
-      );
-      const { result, unmount } = renderSession(room);
+      const fake = createFakeRoom();
+      const picker = holdPicker(fake);
+      const { result, unmount } = renderSession(fake.room);
 
-      const rpc = invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);
+      const rpc = invokeConsent(fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!);
       await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
 
       let accepting!: Promise<void>;
@@ -503,10 +573,99 @@ describe('useScreenshareSession', () => {
       expect(response.reason).toBe('widget_closed');
 
       await act(async () => {
-        releasePicker(fakePublication('monitor', 'TR_late'));
+        picker.release();
         await accepting;
       });
-      expect(setScreenShareEnabled).toHaveBeenLastCalledWith(false);
+      expect(fake.setScreenShareEnabled).toHaveBeenLastCalledWith(false);
+    });
+
+    it('stops the capture at the source when unpublishing it fails', async () => {
+      const fake = createFakeRoom();
+      const picker = holdPicker(fake);
+      const { result } = renderSession(fake.room);
+
+      const rpc = invokeConsent(fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!);
+      await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
+      let accepting!: Promise<void>;
+      await act(async () => {
+        accepting = result.current.acceptConsent();
+      });
+      await act(async () => {
+        await invokeStop(fake.rpcHandlers.get(RPC_STOP)!);
+      });
+      await rpc;
+
+      // The compensating unpublish is the one thing that can still fail here...
+      fake.setScreenShareEnabled.mockRejectedValueOnce(new Error('unpublish failed'));
+      let late!: ReturnType<typeof fakePublication>;
+      await act(async () => {
+        late = picker.release();
+        await accepting;
+      });
+
+      // ...so the capture is ended at the source, which cannot.
+      expect(late.track.stop).toHaveBeenCalledTimes(1);
+      expect(result.current.isSharing).toBe(false);
+    });
+
+    it('opens only one picker however many times Share is pressed', async () => {
+      const fake = createFakeRoom();
+      const picker = holdPicker(fake);
+      const { result } = renderSession(fake.room);
+
+      const rpc = invokeConsent(fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!);
+      await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
+
+      let first!: Promise<void>;
+      let second!: Promise<void>;
+      await act(async () => {
+        first = result.current.acceptConsent();
+        second = result.current.acceptConsent();
+      });
+      // The second press is a no-op rather than a second capture whose loser would tear
+      // down the winner's live track.
+      expect(fake.setScreenShareEnabled).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        picker.release();
+        await Promise.all([first, second]);
+      });
+
+      expect((await parse(rpc)).result).toBe('granted');
+      expect(result.current.isSharing).toBe(true);
+      expect(fake.setScreenShareEnabled).not.toHaveBeenCalledWith(false);
+    });
+
+    it('leaves a newer request on screen when a superseded accept finishes', async () => {
+      const fake = createFakeRoom();
+      const picker = holdPicker(fake);
+      const { result } = renderSession(fake.room);
+
+      const first = invokeConsent(fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!);
+      await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
+      let accepting!: Promise<void>;
+      await act(async () => {
+        accepting = result.current.acceptConsent();
+      });
+
+      // The agent withdraws and immediately asks again.
+      await act(async () => {
+        await invokeStop(fake.rpcHandlers.get(RPC_STOP)!);
+      });
+      await first;
+      const second = invokeConsent(fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!);
+      await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
+
+      await act(async () => {
+        picker.release();
+        await accepting;
+      });
+
+      // The stale accept must not take the new prompt off the screen: the caller would be
+      // left with a request they cannot answer, which would then time out.
+      expect(result.current.consentRequest).not.toBeNull();
+      act(() => result.current.declineConsent());
+      expect((await parse(second)).result).toBe('declined');
     });
   });
 
@@ -516,7 +675,8 @@ describe('useScreenshareSession', () => {
       const { room, rpcHandlers } = createFakeRoom();
       const hook = renderSession(room, { onStopped: (reason) => reasons.push(reason) });
 
-      // The browser's own "Stop sharing" bar: nothing in this hook asked for it.
+      // The browser's own "Stop sharing" bar: the track ends and the SDK unpublishes it,
+      // with nothing in this hook having asked. That event is the only real signal.
       await shareUntilGranted(rpcHandlers, hook);
       act(() => {
         room.emit(RoomEvent.LocalTrackUnpublished, fakePublication('window'));
@@ -524,19 +684,45 @@ describe('useScreenshareSession', () => {
       expect(reasons).toEqual(['browser_stop']);
       expect(hook.result.current.isSharing).toBe(false);
 
-      // The caller pressing stop in the widget.
+      // The caller pressing stop in the widget -- driven through stopShare, not by
+      // emitting the event by hand, so the reason really does travel the way it will live.
+      await shareUntilGranted(rpcHandlers, hook);
       await act(async () => {
         await hook.result.current.stopShare();
-        room.emit(RoomEvent.LocalTrackUnpublished, fakePublication('window'));
       });
       expect(reasons).toEqual(['browser_stop', 'caller_stop']);
 
-      // The agent's screenshare.stop.
+      // The agent's screenshare.stop, likewise through the handler.
+      await shareUntilGranted(rpcHandlers, hook);
       await act(async () => {
         await invokeStop(rpcHandlers.get(RPC_STOP)!);
-        room.emit(RoomEvent.LocalTrackUnpublished, fakePublication('window'));
       });
       expect(reasons).toEqual(['browser_stop', 'caller_stop', 'agent_end']);
+    });
+
+    it("never spends an agent stop reason on the caller's next browser stop", async () => {
+      const reasons: StopReason[] = [];
+      const { room, rpcHandlers } = createFakeRoom();
+      const hook = renderSession(room, { onStopped: (reason) => reasons.push(reason) });
+
+      // The agent withdraws while only the PROMPT is open. Nothing is published, so
+      // nothing is unpublished and no reason is consumed.
+      const rpc = invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);
+      await waitFor(() => expect(hook.result.current.consentRequest).not.toBeNull());
+      await act(async () => {
+        await invokeStop(rpcHandlers.get(RPC_STOP)!);
+      });
+      expect((await parse(rpc)).reason).toBe('agent_end');
+      expect(reasons).toEqual([]);
+
+      // The caller then shares, and stops it from the browser's own bar. If `agent_end`
+      // were still latched from the withdrawal above, this would be reported as the
+      // agent's doing -- the same attribution falsehood by a slower route.
+      await shareUntilGranted(rpcHandlers, hook);
+      act(() => {
+        room.emit(RoomEvent.LocalTrackUnpublished, fakePublication('window'));
+      });
+      expect(reasons).toEqual(['browser_stop']);
     });
 
     it('ignores tracks that are not the screen share', async () => {
