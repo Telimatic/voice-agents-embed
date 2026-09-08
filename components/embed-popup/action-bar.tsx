@@ -28,7 +28,13 @@ export interface ScreenShareControl {
 export interface AgentControlBarProps
   extends React.HTMLAttributes<HTMLDivElement>,
     UseAgentControlBarProps {
-  capabilities: Pick<AppConfig, 'supportsChatInput' | 'supportsVideoInput' | 'supportsScreenShare'>;
+  capabilities: Pick<AppConfig, 'supportsChatInput' | 'supportsVideoInput'> & {
+    /**
+     * TLZ-561. Resolved per session rather than read from AppConfig: the token's grant,
+     * the device's ability to capture, and an agent in the room that can receive it.
+     */
+    supportsScreenShare: boolean;
+  };
   screenShareControl?: ScreenShareControl;
   onChatOpenChange?: (open: boolean) => void;
   onSendMessage?: (message: string) => Promise<void>;

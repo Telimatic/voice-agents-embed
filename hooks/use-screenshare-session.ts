@@ -605,33 +605,57 @@ export function useScreenshareSession(
       }
     };
 
+    /**
+     * Everything is re-checked rather than assumed, because both callers exist precisely
+     * for the case where the situation changes before this runs.
+     *
+     * `stopReasonRef` is the single-notify guard: it is non-null from the moment a stop is
+     * asked for until the unpublish listener consumes it, so a second call inside that
+     * window cannot start a second teardown of the same share.
+     */
+    const reportAgentGone = () => {
+      const stillAway = !Array.from(room.remoteParticipants?.values() ?? []).some((remote) =>
+        isAgentParticipant(remote as AgentParticipantLike)
+      );
+      if (room.state !== 'connected' || !stillAway || stopReasonRef.current) {
+        return;
+      }
+      // Nothing published means nothing to stop: `setScreenShareEnabled(false)` would
+      // emit no unpublish, and a stop would be reported for a share that never was.
+      if (!room.localParticipant.getTrackPublication(Track.Source.ScreenShare)) {
+        return;
+      }
+      void stopShare('agent_left');
+    };
+
     const onParticipantDisconnected = (participant: AgentParticipantLike) => {
       if (!isAgentParticipant(participant) || agentLeftTimerRef.current) {
         return;
       }
       agentLeftTimerRef.current = setTimeout(() => {
         agentLeftTimerRef.current = null;
-        // Everything is re-checked rather than assumed, because the grace window exists
-        // precisely for the case where the situation changes inside it.
-        const stillAway = !Array.from(room.remoteParticipants?.values() ?? []).some((remote) =>
-          isAgentParticipant(remote as AgentParticipantLike)
-        );
-        if (room.state !== 'connected' || !stillAway) {
-          return;
-        }
-        // Nothing published means nothing to stop: `setScreenShareEnabled(false)` would
-        // emit no unpublish, and a stop would be reported for a share that never was.
-        if (!room.localParticipant.getTrackPublication(Track.Source.ScreenShare)) {
-          return;
-        }
-        void stopShare('agent_left');
+        reportAgentGone();
       }, AGENT_LEFT_GRACE_MS);
     };
 
+    // A reconnect that outlasts the grace window would otherwise lose the departure
+    // entirely: the timer fires while the room is still reconnecting, declines to report,
+    // and nulls itself -- and the SDK does not re-emit ParticipantDisconnected for a
+    // participant that never came back, so nothing would ever re-arm. By the time
+    // Reconnected is emitted the connection state is already `connected` and
+    // `remoteParticipants` has been repopulated from the join response, so absence here is
+    // the real thing rather than a gap mid-restart.
+    const onReconnected = () => {
+      clearPending();
+      reportAgentGone();
+    };
+
     room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+    room.on(RoomEvent.Reconnected, onReconnected);
     room.on(RoomEvent.Disconnected, clearPending);
     return () => {
       room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+      room.off(RoomEvent.Reconnected, onReconnected);
       room.off(RoomEvent.Disconnected, clearPending);
       clearPending();
     };

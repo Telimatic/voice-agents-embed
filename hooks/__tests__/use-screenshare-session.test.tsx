@@ -800,6 +800,144 @@ describe('useScreenshareSession', () => {
       }
     });
 
+    it('still reports the departure after a reconnect longer than the grace window', async () => {
+      vi.useFakeTimers();
+      try {
+        const reasons: StopReason[] = [];
+        const fake = createFakeRoom();
+        const agent = fakeAgent();
+        fake.remoteParticipants.set(agent.identity, agent);
+        const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+        await shareUntilGrantedWithFakeTimers(fake.rpcHandlers, hook);
+
+        // A restart drops every remote participant, and this one takes longer than the
+        // grace window. The timer fires mid-restart, correctly declines to report, and
+        // nulls itself -- and the SDK will not emit ParticipantDisconnected again.
+        fake.room.state = 'reconnecting';
+        act(() => fake.removeParticipant(agent));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS * 4);
+        });
+        expect(reasons).toEqual([]);
+
+        // ...so the departure has to be picked up when the connection comes back. By then
+        // the SDK has already set the state and repopulated remoteParticipants.
+        fake.room.state = 'connected';
+        await act(async () => {
+          fake.room.emit(RoomEvent.Reconnected);
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(reasons).toEqual(['agent_left']);
+        expect(hook.result.current.isSharing).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports nothing on reconnect when the agent came back', async () => {
+      vi.useFakeTimers();
+      try {
+        const reasons: StopReason[] = [];
+        const fake = createFakeRoom();
+        const agent = fakeAgent();
+        fake.remoteParticipants.set(agent.identity, agent);
+        const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+        await shareUntilGrantedWithFakeTimers(fake.rpcHandlers, hook);
+
+        fake.room.state = 'reconnecting';
+        act(() => fake.removeParticipant(agent));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS * 4);
+        });
+
+        // The SDK repopulates remoteParticipants from the join response BEFORE it emits
+        // Reconnected, so a returning agent is already visible here.
+        fake.remoteParticipants.set(agent.identity, agent);
+        fake.room.state = 'connected';
+        await act(async () => {
+          fake.room.emit(RoomEvent.Reconnected);
+          await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS * 2);
+        });
+
+        expect(reasons).toEqual([]);
+        expect(hook.result.current.isSharing).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports the departure once when the grace timer and the reconnect both land', async () => {
+      vi.useFakeTimers();
+      try {
+        const reasons: StopReason[] = [];
+        const fake = createFakeRoom();
+        const agent = fakeAgent();
+        fake.remoteParticipants.set(agent.identity, agent);
+        const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+        await shareUntilGrantedWithFakeTimers(fake.rpcHandlers, hook);
+
+        // Both paths armed at once, with the room connected throughout, so neither is
+        // filtered out by a state check. Exactly one stop must still be reported.
+        act(() => fake.removeParticipant(agent));
+        await act(async () => {
+          fake.room.emit(RoomEvent.Reconnected);
+          await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS * 4);
+        });
+
+        expect(reasons).toEqual(['agent_left']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('starts no second teardown while the first is still in flight', async () => {
+      vi.useFakeTimers();
+      try {
+        const reasons: StopReason[] = [];
+        const fake = createFakeRoom();
+        const agent = fakeAgent();
+        fake.remoteParticipants.set(agent.identity, agent);
+        const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+        await shareUntilGrantedWithFakeTimers(fake.rpcHandlers, hook);
+        const stopsBefore = fake.setScreenShareEnabled.mock.calls.filter(([on]) => !on).length;
+
+        // The real SDK unpublishes asynchronously, so there is a window in which the
+        // track is still published AND a stop is already under way. Held open here.
+        let release!: () => void;
+        fake.setScreenShareEnabled.mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              release = () => {
+                fake.stopFromBrowserBar();
+                resolve(undefined);
+              };
+            })
+        );
+
+        act(() => fake.removeParticipant(agent));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS);
+        });
+        // The reconnect check lands inside that window, sees a live publication, and must
+        // still decline: a stop is already on its way.
+        await act(async () => {
+          fake.room.emit(RoomEvent.Reconnected);
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        await act(async () => {
+          release();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        const stopsAfter = fake.setScreenShareEnabled.mock.calls.filter(([on]) => !on).length;
+        expect(stopsAfter - stopsBefore).toBe(1);
+        expect(reasons).toEqual(['agent_left']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not read a reconnect republish as a stop', async () => {
       const reasons: StopReason[] = [];
       const fake = createFakeRoom();

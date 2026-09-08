@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Room } from 'livekit-client';
+import { Room, RoomEvent } from 'livekit-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RoomContext } from '@livekit/components-react';
 import { act, renderHook } from '@testing-library/react';
@@ -222,6 +222,39 @@ describe('one stopped notification per share', () => {
     // was watching, and an unreachable notification is better than a silent one.
     expect(lastRpc(fake).destinationIdentity).toBe(agent.identity);
     expect(hook.result.current.isSharing).toBe(false);
+  });
+
+  it('still sends exactly one after a reconnect that outlasts the grace window', async () => {
+    const { fake, agent } = withAgent();
+    const hook = renderWired(fake.room);
+    await shareUntilGranted(fake.rpcHandlers, hook);
+
+    // The agent goes during a restart that takes longer than the grace window, and does
+    // not come back. Nothing is reported while the room is reconnecting...
+    fake.room.state = 'reconnecting';
+    act(() => fake.removeParticipant(agent));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS * 4);
+    });
+    expect(notifications(fake)).toEqual([]);
+
+    // ...and the departure is picked up when the connection returns, exactly once. Both
+    // the expired timer and the reconnect check run against the same share.
+    fake.room.state = 'connected';
+    await act(async () => {
+      fake.room.emit(RoomEvent.Reconnected);
+      await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS * 2);
+    });
+
+    expect(stopNotifications(fake)).toEqual([
+      {
+        v: SCREENSHARE_PROTOCOL_VERSION,
+        event: 'stopped',
+        initiated_by: 'agent',
+        reason: 'agent_left',
+      },
+    ]);
+    expect(notifications(fake)).toHaveLength(1);
   });
 
   it('sends exactly four, one per share, across all four reasons in one session', async () => {

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // is exported and resolves at runtime.
 // eslint-disable-next-line import/named
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { ShareBadge, ShareBanner } from '@/components/embed-popup/share-banner';
+import { ShareBadge, ShareBanner, ShareStatus } from '@/components/embed-popup/share-banner';
 
 /**
  * TLZ-561 (A3, F5). The indicator has two jobs: say plainly that a screen is being
@@ -60,12 +60,32 @@ describe('ShareBanner', () => {
 });
 
 describe('ShareBadge', () => {
-  it('states the sharing in words, not only in colour', () => {
-    render(<ShareBadge />);
+  it('contributes no text, because it is rendered inside the trigger button', () => {
+    // Any text here would be folded into that button's accessible name, so a
+    // screen-reader user would hear the sharing status as the name of the button they
+    // are trying to press. The badge is the visual half only.
+    render(
+      <button type="button">
+        Open the assistant
+        <ShareBadge />
+      </button>
+    );
 
     const badge = screen.getByTestId('screenshare-badge');
-    expect(badge).toHaveAttribute('role', 'status');
-    expect(screen.getByText(/sharing your screen/i)).toBeInTheDocument();
+    expect(badge).toHaveAttribute('aria-hidden', 'true');
+    expect(badge).toHaveTextContent('');
+    expect(screen.getByRole('button')).toHaveAccessibleName('Open the assistant');
     expect(badge.innerHTML).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+  });
+});
+
+describe('ShareStatus', () => {
+  it('states the sharing in words, in a live region of its own', () => {
+    render(<ShareStatus />);
+
+    const status = screen.getByTestId('screenshare-status');
+    expect(status).toHaveAttribute('role', 'status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toHaveTextContent(/sharing your screen/i);
   });
 });

@@ -80,15 +80,16 @@ export interface ShareBadgeProps {
 }
 
 /**
- * The collapsed trigger's sharing badge. Small on purpose -- the trigger is a 48px
- * button -- but it carries its own accessible text, because a coloured dot alone is not
- * a statement that a screen is being shared.
+ * The collapsed trigger's sharing badge. Purely visual, and deliberately so: it is
+ * rendered INSIDE the trigger button, and any text here would be folded into that
+ * button's accessible name -- a screen-reader user would hear the sharing status
+ * announced as the name of the button they are trying to press. The spoken half is
+ * `ShareStatus`, rendered as a sibling of the button.
  */
 export function ShareBadge({ className }: ShareBadgeProps) {
   return (
     <span
-      role="status"
-      aria-live="polite"
+      aria-hidden="true"
       data-testid="screenshare-badge"
       className={cn(
         'bg-bgSerious border-bg1 pointer-events-none absolute -top-1 -right-1 z-30',
@@ -96,8 +97,19 @@ export function ShareBadge({ className }: ShareBadgeProps) {
         className
       )}
     >
-      <span aria-hidden="true" className="bg-fgSerious size-2 animate-pulse rounded-full" />
-      <span className="sr-only">You are sharing your screen</span>
+      <span className="bg-fgSerious size-2 animate-pulse rounded-full" />
+    </span>
+  );
+}
+
+/**
+ * The spoken half of the badge: a live region OUTSIDE the trigger button, so the sharing
+ * state is announced without becoming the button's name.
+ */
+export function ShareStatus() {
+  return (
+    <span role="status" aria-live="polite" data-testid="screenshare-status" className="sr-only">
+      You are sharing your screen
     </span>
   );
 }
