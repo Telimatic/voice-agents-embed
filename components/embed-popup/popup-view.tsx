@@ -12,6 +12,7 @@ import {
   useTracks,
   useVoiceAssistant,
 } from '@livekit/components-react';
+import type { ConnectionDetails } from '@/app/api/connection-details/route';
 import { ActionBar } from '@/components/embed-popup/action-bar';
 import { AudioVisualizer } from '@/components/embed-popup/audio-visualizer';
 import { Transcript } from '@/components/embed-popup/transcript';
@@ -48,6 +49,9 @@ type PopupProps = {
   disabled: boolean;
   sessionStarted: boolean;
   onEmbedError: React.Dispatch<React.SetStateAction<EmbedErrorDetails | null>>;
+  // TLZ-561. Resolved by the token route per-agent; absent before the first token comes
+  // back (or if that fetch never lands, e.g. `disabled`/pre-connect states).
+  connectionCapabilities?: ConnectionDetails['capabilities'];
 };
 
 export const PopupView = ({
@@ -55,6 +59,7 @@ export const PopupView = ({
   disabled,
   sessionStarted,
   onEmbedError,
+  connectionCapabilities,
   ref,
 }: React.ComponentProps<'div'> & PopupProps) => {
   useDebugMode();
@@ -75,7 +80,8 @@ export const PopupView = ({
   const capabilities = {
     supportsChatInput,
     supportsVideoInput,
-    supportsScreenShare,
+    // The token is the authority; the build-time constant only ever disables.
+    supportsScreenShare: supportsScreenShare || connectionCapabilities?.screenshare === true,
   };
 
   async function onSendMessage(message: string) {

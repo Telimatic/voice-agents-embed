@@ -21,7 +21,7 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
   const room = useMemo(() => new Room(), []);
   const [popupOpen, setPopupOpen] = useState(false);
   const [error, setError] = useState<EmbedErrorDetails | null>(null);
-  const { refreshConnectionDetails } = useConnectionDetails(appConfig);
+  const { connectionDetails, refreshConnectionDetails } = useConnectionDetails(appConfig);
 
   const handleTogglePopup = () => {
     if (isAnimating.current) {
@@ -126,6 +126,7 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
             {!error && (
               <PopupViewMotion
                 appConfig={appConfig}
+                connectionCapabilities={connectionDetails?.capabilities}
                 initial={{ opacity: 1 }}
                 animate={{ opacity: error === null ? 1 : 0 }}
                 transition={{
