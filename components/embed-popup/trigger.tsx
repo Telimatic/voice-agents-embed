@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useVoiceAssistant } from '@livekit/components-react';
+import { useLocalParticipant, useVoiceAssistant } from '@livekit/components-react';
 import { PhoneDisconnectIcon, PhoneIcon, XIcon } from '@phosphor-icons/react';
+import { ShareBadge } from '@/components/embed-popup/share-banner';
 import { EmbedErrorDetails } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { Button } from '../ui/button';
@@ -15,6 +16,9 @@ interface TriggerProps {
 
 export function Trigger({ error = null, popupOpen, onToggle }: TriggerProps) {
   const { state: agentState } = useVoiceAssistant();
+  // TLZ-561 (A3). Track publication state, not the session hook: the trigger renders
+  // outside the panel and must keep saying "you are sharing" once the panel is closed.
+  const { isScreenShareEnabled } = useLocalParticipant();
 
   const isAgentConnecting =
     popupOpen && (agentState === 'connecting' || agentState === 'initializing');
@@ -113,6 +117,10 @@ export function Trigger({ error = null, popupOpen, onToggle }: TriggerProps) {
             )}
           </AnimatePresence>
         </div>
+
+        {/* The trigger is fixed to the viewport, so this is the one sharing indicator that
+            survives both a closed panel and any scroll position. */}
+        {isScreenShareEnabled && !popupOpen && <ShareBadge />}
       </AnimatedButton>
     </AnimatePresence>
   );

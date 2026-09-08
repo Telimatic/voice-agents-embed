@@ -9,6 +9,11 @@ import {
   Track,
 } from 'livekit-client';
 import { useRoomContext } from '@livekit/components-react';
+import {
+  type AgentParticipantLike,
+  isAgentParticipant,
+  useScreenshareAgent,
+} from '@/hooks/use-screenshare-peer';
 import { canCaptureDisplay } from '@/lib/screenshare-capability';
 import {
   ATTR_CAPABLE,
@@ -49,6 +54,16 @@ export const MAX_CONSENT_TIMEOUT_SECONDS = 120;
 /** Headroom for the answer to travel back inside the caller's `responseTimeout`. */
 const RESPONSE_TRAVEL_SECONDS = 1;
 
+/**
+ * How long an agent may be gone before its departure is treated as the end of the share.
+ *
+ * A full reconnect disconnects every remote participant and brings them straight back,
+ * and the SDK republishes the local tracks with them. Tearing a caller's screen share
+ * down on a network blip is a worse outcome -- and a falser one -- than a share that
+ * outlives the agent by a second and a half.
+ */
+export const AGENT_LEFT_GRACE_MS = 1_500;
+
 export interface ConsentRequest {
   /** The surfaces this caller may choose between: the agent's scope, narrowed by policy. */
   surfaces: ShareSurface[];
@@ -79,6 +94,13 @@ export interface UseScreenshareSessionOptions {
 
 export interface ScreenshareSession {
   isSharing: boolean;
+  /** True only while an agent that can receive a share is in the room (A2). */
+  agentReady: boolean;
+  /**
+   * Whether the share control may be offered at all: the token granted the capability,
+   * this browser can capture a display, and there is an agent listening for the share.
+   */
+  canShare: boolean;
   consentRequest: ConsentRequest | null;
   acceptConsent: () => Promise<void>;
   declineConsent: () => void;
@@ -173,6 +195,7 @@ export function useScreenshareSession(
   const room = useRoomContext();
   // Evaluated once per session: the browser cannot grow the ability mid-call.
   const capable = useMemo(() => canCaptureDisplay(), []);
+  const { agentReady } = useScreenshareAgent();
 
   const [isSharing, setIsSharing] = useState(false);
   const [consentRequest, setConsentRequest] = useState<ConsentRequest | null>(null);
@@ -188,6 +211,8 @@ export function useScreenshareSession(
   const capturingRef = useRef(false);
   /** How the outstanding request was answered, when something other than the caller answered it. */
   const settledResultRef = useRef<ConsentResult | null>(null);
+  /** Pending "the agent has gone" check; see AGENT_LEFT_GRACE_MS. */
+  const agentLeftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     enabledRef.current = options.enabled ?? false;
@@ -541,6 +566,14 @@ export function useScreenshareSession(
       if (publication.source !== Track.Source.ScreenShare) {
         return;
       }
+      // A reconnect is not a stop. `republishAllTracks` unpublishes every local track and
+      // publishes it straight back, so an unpublish that lands while the room is not
+      // connected would report a share that is still live -- and, because the track
+      // returns, a SECOND stop would then be reported when it really does end. The room
+      // ending is handled by `onDisconnected` below.
+      if (room.state !== 'connected') {
+        return;
+      }
       setIsSharing(false);
       const reason = stopReasonRef.current ?? 'browser_stop';
       stopReasonRef.current = null;
@@ -557,6 +590,53 @@ export function useScreenshareSession(
     };
   }, [room]);
 
+  // A share whose only viewer has gone is over. It is routed through `stopShare` rather
+  // than reported directly, so the end travels the SAME single path as every other stop:
+  // one unpublish, one `onStopped`, one notification. Reporting it here as well would
+  // double-count exactly the share the caller most needs told about accurately.
+  useEffect(() => {
+    if (!room) {
+      return;
+    }
+    const clearPending = () => {
+      if (agentLeftTimerRef.current) {
+        clearTimeout(agentLeftTimerRef.current);
+        agentLeftTimerRef.current = null;
+      }
+    };
+
+    const onParticipantDisconnected = (participant: AgentParticipantLike) => {
+      if (!isAgentParticipant(participant) || agentLeftTimerRef.current) {
+        return;
+      }
+      agentLeftTimerRef.current = setTimeout(() => {
+        agentLeftTimerRef.current = null;
+        // Everything is re-checked rather than assumed, because the grace window exists
+        // precisely for the case where the situation changes inside it.
+        const stillAway = !Array.from(room.remoteParticipants?.values() ?? []).some((remote) =>
+          isAgentParticipant(remote as AgentParticipantLike)
+        );
+        if (room.state !== 'connected' || !stillAway) {
+          return;
+        }
+        // Nothing published means nothing to stop: `setScreenShareEnabled(false)` would
+        // emit no unpublish, and a stop would be reported for a share that never was.
+        if (!room.localParticipant.getTrackPublication(Track.Source.ScreenShare)) {
+          return;
+        }
+        void stopShare('agent_left');
+      }, AGENT_LEFT_GRACE_MS);
+    };
+
+    room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+    room.on(RoomEvent.Disconnected, clearPending);
+    return () => {
+      room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+      room.off(RoomEvent.Disconnected, clearPending);
+      clearPending();
+    };
+  }, [room, stopShare]);
+
   // The panel can close with a request still outstanding; the agent is told rather than
   // left waiting for a promise nobody will ever settle. A capture still in flight is
   // caught by the ownership check in acceptConsent, which runs even after unmount.
@@ -569,7 +649,19 @@ export function useScreenshareSession(
     [settle]
   );
 
-  return { isSharing, consentRequest, acceptConsent, declineConsent, startShare, stopShare };
+  return {
+    isSharing,
+    agentReady,
+    // All three conditions, and the agent one is not decoration: without it a caller can
+    // start a share nobody is listening for, producing a screen track against no consent
+    // record at all.
+    canShare: (options.enabled ?? false) && capable && agentReady,
+    consentRequest,
+    acceptConsent,
+    declineConsent,
+    startShare,
+    stopShare,
+  };
 }
 
 export default useScreenshareSession;

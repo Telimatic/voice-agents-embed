@@ -7,12 +7,14 @@ import { RoomContext } from '@livekit/components-react';
 // eslint-disable-next-line import/named
 import { act, renderHook, waitFor } from '@testing-library/react';
 import {
+  AGENT_LEFT_GRACE_MS,
   MAX_CONSENT_TIMEOUT_SECONDS,
   type UseScreenshareSessionOptions,
   useScreenshareSession,
 } from '@/hooks/use-screenshare-session';
 import {
   ATTR_CAPABLE,
+  ATTR_ENABLED,
   RPC_REQUEST_CONSENT,
   RPC_STOP,
   type RequestConsentResponse,
@@ -21,124 +23,16 @@ import {
   type StopReason,
   type StopResponse,
 } from '@/lib/screenshare-protocol';
-
-type RpcHandler = (data: {
-  requestId: string;
-  callerIdentity: string;
-  payload: string;
-  responseTimeout: number;
-}) => Promise<string>;
-
-const CAPABLE_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120 Safari/537.36';
-
-function stubNavigator({ capable }: { capable: boolean }) {
-  vi.stubGlobal('navigator', {
-    userAgent: capable
-      ? CAPABLE_UA
-      : 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari',
-    mediaDevices: { getDisplayMedia: () => {} },
-    maxTouchPoints: capable ? 0 : 5,
-  });
-}
-
-function fakePublication(displaySurface: string | undefined, trackSid = 'TR_screen_1') {
-  return {
-    trackSid,
-    source: Track.Source.ScreenShare,
-    track: {
-      stop: vi.fn(),
-      mediaStreamTrack: { getSettings: () => ({ displaySurface }) },
-    },
-  };
-}
-
-/**
- * Behaves like the SDK in the two ways this hook depends on: `setScreenShareEnabled(false)`
- * resolves to the publication it took down (or `undefined` when there was nothing to take
- * down), and the unpublish event fires synchronously inside that call.
- */
-function createFakeRoom() {
-  const rpcHandlers = new Map<string, RpcHandler>();
-  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
-  let published: ReturnType<typeof fakePublication> | undefined;
-
-  const setScreenShareEnabled = vi.fn(
-    async (
-      ...args: [enabled: boolean, options?: Record<string, unknown>]
-    ): Promise<ReturnType<typeof fakePublication> | undefined> => {
-      if (args[0]) {
-        published = fakePublication('window');
-        return published;
-      }
-      const wasPublished = published;
-      published = undefined;
-      if (wasPublished) {
-        room.emit(RoomEvent.LocalTrackUnpublished, wasPublished);
-      }
-      return wasPublished;
-    }
-  );
-  const getTrackPublication = vi.fn(() => published);
-  const setAttributes = vi.fn(async () => undefined);
-
-  const room = {
-    state: 'connected',
-    localParticipant: { setScreenShareEnabled, setAttributes, getTrackPublication },
-    registerRpcMethod: vi.fn((method: string, handler: RpcHandler) => {
-      rpcHandlers.set(method, handler);
-    }),
-    unregisterRpcMethod: vi.fn((method: string) => {
-      rpcHandlers.delete(method);
-    }),
-    on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
-      if (!listeners.has(event)) listeners.set(event, new Set());
-      listeners.get(event)!.add(cb);
-      return room;
-    }),
-    off: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
-      listeners.get(event)?.delete(cb);
-      return room;
-    }),
-    emit: (event: string, ...args: unknown[]) => {
-      listeners.get(event)?.forEach((cb) => cb(...args));
-    },
-  };
-
-  return {
-    room,
-    rpcHandlers,
-    setScreenShareEnabled,
-    setAttributes,
-    getTrackPublication,
-    /** Mirrors the SDK: once the picker resolves, the publication exists on the participant. */
-    setPublished: (pub: ReturnType<typeof fakePublication> | undefined) => {
-      published = pub;
-    },
-  };
-}
-
-/**
- * Hold the browser picker open. The promise stays unresolved until `release`, which is how
- * every "something answered while the caller was still choosing" case is driven.
- */
-function holdPicker(fake: ReturnType<typeof createFakeRoom>) {
-  let resolvePicker!: (pub: ReturnType<typeof fakePublication> | undefined) => void;
-  fake.setScreenShareEnabled.mockImplementationOnce(
-    () =>
-      new Promise<ReturnType<typeof fakePublication> | undefined>((resolve) => {
-        resolvePicker = resolve;
-      })
-  );
-  return {
-    release: (pub = fakePublication('monitor', 'TR_late')) => {
-      fake.setPublished(pub);
-      resolvePicker(pub);
-      return pub;
-    },
-  };
-}
-
-type FakeRoom = ReturnType<typeof createFakeRoom>['room'];
+import {
+  type FakeRoom,
+  type RpcHandler,
+  createFakeRoom,
+  fakeAgent,
+  fakeHuman,
+  fakePublication,
+  holdPicker,
+  stubNavigator,
+} from './fake-room';
 
 function renderSession(room: FakeRoom, options: UseScreenshareSessionOptions = {}) {
   const wrapper = ({ children }: { children: ReactNode }) => (
@@ -190,6 +84,26 @@ async function shareUntilGranted(
 ) {
   const rpc = invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);
   await waitFor(() => expect(hook.result.current.consentRequest).not.toBeNull());
+  await act(async () => {
+    await hook.result.current.acceptConsent();
+  });
+  await rpc;
+  return rpc;
+}
+
+/**
+ * The same thing under fake timers. `waitFor` cannot be used there -- testing-library
+ * only recognises jest's fake timers, so under vitest's it polls with a mocked interval
+ * that never fires -- so the render is flushed by advancing the clock instead.
+ */
+async function shareUntilGrantedWithFakeTimers(
+  rpcHandlers: Map<string, RpcHandler>,
+  hook: ReturnType<typeof renderSession>
+) {
+  const rpc = invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
   await act(async () => {
     await hook.result.current.acceptConsent();
   });
@@ -739,6 +653,173 @@ describe('useScreenshareSession', () => {
       });
       expect(reasons).toEqual([]);
       expect(hook.result.current.isSharing).toBe(true);
+    });
+  });
+
+  describe('the share control is gated on an agent that can receive the share', () => {
+    it('offers nothing until such an agent is in the room', async () => {
+      const fake = createFakeRoom();
+      const hook = renderSession(fake.room);
+
+      // The token said yes and the browser can capture, but nobody is listening.
+      expect(hook.result.current.agentReady).toBe(false);
+      expect(hook.result.current.canShare).toBe(false);
+
+      act(() => fake.addParticipant(fakeAgent()));
+      await waitFor(() => expect(hook.result.current.canShare).toBe(true));
+    });
+
+    it('sees the attribute the agent publishes AFTER it joins', async () => {
+      const fake = createFakeRoom();
+      const hook = renderSession(fake.room);
+
+      // This is the real sequence: the worker joins, resolves the session, and only then
+      // sets the attribute. A ParticipantConnected-only listener never sees it.
+      const agent = fakeAgent('agent-1', { [ATTR_ENABLED]: 'false' });
+      act(() => fake.addParticipant(agent));
+      expect(hook.result.current.canShare).toBe(false);
+
+      act(() => fake.setParticipantAttributes(agent, { [ATTR_ENABLED]: 'true' }));
+      await waitFor(() => expect(hook.result.current.canShare).toBe(true));
+    });
+
+    it('withdraws the control when that agent leaves', async () => {
+      const fake = createFakeRoom();
+      const agent = fakeAgent();
+      const hook = renderSession(fake.room);
+      act(() => fake.addParticipant(agent));
+      await waitFor(() => expect(hook.result.current.canShare).toBe(true));
+
+      act(() => fake.removeParticipant(agent));
+      await waitFor(() => expect(hook.result.current.canShare).toBe(false));
+    });
+
+    it('ignores a human participant and an agent that never enabled screenshare', async () => {
+      const fake = createFakeRoom();
+      const hook = renderSession(fake.room);
+
+      act(() => fake.addParticipant(fakeHuman()));
+      act(() => fake.addParticipant(fakeAgent('agent-off', {})));
+      // Two participants, neither of which can receive a share.
+      await waitFor(() => expect(fake.room.remoteParticipants.size).toBe(2));
+      expect(hook.result.current.canShare).toBe(false);
+    });
+
+    it('stays shut for an organization the token did not grant, and for a device that cannot capture', async () => {
+      const denied = createFakeRoom();
+      const deniedHook = renderSession(denied.room, { enabled: false });
+      act(() => denied.addParticipant(fakeAgent()));
+      await waitFor(() => expect(deniedHook.result.current.agentReady).toBe(true));
+      expect(deniedHook.result.current.canShare).toBe(false);
+
+      stubNavigator({ capable: false });
+      const incapable = createFakeRoom();
+      const incapableHook = renderSession(incapable.room);
+      act(() => incapable.addParticipant(fakeAgent()));
+      await waitFor(() => expect(incapableHook.result.current.agentReady).toBe(true));
+      expect(incapableHook.result.current.canShare).toBe(false);
+    });
+  });
+
+  describe('agent_left', () => {
+    it('ends the share, once, when the agent goes', async () => {
+      vi.useFakeTimers();
+      try {
+        const reasons: StopReason[] = [];
+        const fake = createFakeRoom();
+        const agent = fakeAgent();
+        fake.remoteParticipants.set(agent.identity, agent);
+        const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+        await shareUntilGrantedWithFakeTimers(fake.rpcHandlers, hook);
+        expect(hook.result.current.isSharing).toBe(true);
+
+        act(() => fake.removeParticipant(agent));
+        // Nothing yet: the grace window is exactly what stops a reconnect blip from
+        // reading as a departure.
+        expect(reasons).toEqual([]);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS);
+        });
+
+        // One notification, from the same single unpublish listener as every other stop.
+        expect(reasons).toEqual(['agent_left']);
+        expect(fake.setScreenShareEnabled).toHaveBeenLastCalledWith(false);
+        expect(hook.result.current.isSharing).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports nothing when there was no share to end', async () => {
+      vi.useFakeTimers();
+      try {
+        const reasons: StopReason[] = [];
+        const fake = createFakeRoom();
+        const agent = fakeAgent();
+        fake.remoteParticipants.set(agent.identity, agent);
+        renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+
+        act(() => fake.removeParticipant(agent));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS);
+        });
+
+        expect(reasons).toEqual([]);
+        expect(fake.setScreenShareEnabled).not.toHaveBeenCalledWith(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('survives a reconnect that drops the agent and brings it straight back', async () => {
+      vi.useFakeTimers();
+      try {
+        const reasons: StopReason[] = [];
+        const fake = createFakeRoom();
+        const agent = fakeAgent();
+        fake.remoteParticipants.set(agent.identity, agent);
+        const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+        await shareUntilGrantedWithFakeTimers(fake.rpcHandlers, hook);
+
+        // A full reconnect disconnects every remote participant and restores them.
+        act(() => fake.removeParticipant(agent));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS / 3);
+        });
+        act(() => fake.addParticipant(agent));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(AGENT_LEFT_GRACE_MS * 2);
+        });
+
+        // The caller's screen was never torn down over a network blip.
+        expect(reasons).toEqual([]);
+        expect(hook.result.current.isSharing).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not read a reconnect republish as a stop', async () => {
+      const reasons: StopReason[] = [];
+      const fake = createFakeRoom();
+      const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+      await shareUntilGranted(fake.rpcHandlers, hook);
+
+      // republishAllTracks unpublishes every local track and publishes it straight back.
+      // Reported, that would be a stop for a share that is still live -- and then a
+      // SECOND stop when it really ends.
+      fake.room.state = 'reconnecting';
+      act(() => {
+        fake.room.emit(RoomEvent.LocalTrackUnpublished, fakePublication('window'));
+      });
+      expect(reasons).toEqual([]);
+
+      fake.room.state = 'connected';
+      act(() => {
+        fake.room.emit(RoomEvent.LocalTrackUnpublished, fakePublication('window'));
+      });
+      expect(reasons).toEqual(['browser_stop']);
     });
   });
 

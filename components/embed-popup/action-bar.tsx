@@ -13,9 +13,23 @@ import { UseAgentControlBarProps, useAgentControlBar } from '@/hooks/use-agent-c
 import { AppConfig } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
+/**
+ * TLZ-561. When present, the screen-share button is driven by the screenshare session
+ * rather than by LiveKit's own track toggle, so that starting a share records consent and
+ * stopping one is attributed as `caller_stop` on the widget's single stop path. Absent,
+ * the bar keeps its original plain track-toggle behaviour.
+ */
+export interface ScreenShareControl {
+  pressed: boolean;
+  pending: boolean;
+  onPressedChange: (pressed: boolean) => void;
+}
+
 export interface AgentControlBarProps
-  extends React.HTMLAttributes<HTMLDivElement>, UseAgentControlBarProps {
+  extends React.HTMLAttributes<HTMLDivElement>,
+    UseAgentControlBarProps {
   capabilities: Pick<AppConfig, 'supportsChatInput' | 'supportsVideoInput' | 'supportsScreenShare'>;
+  screenShareControl?: ScreenShareControl;
   onChatOpenChange?: (open: boolean) => void;
   onSendMessage?: (message: string) => Promise<void>;
   onDeviceError?: (error: { source: Track.Source; error: Error }) => void;
@@ -28,6 +42,7 @@ export function ActionBar({
   controls,
   saveUserChoices = true,
   capabilities,
+  screenShareControl,
   className,
   onSendMessage,
   onChatOpenChange,
@@ -187,9 +202,10 @@ export function ActionBar({
               <TrackToggle
                 variant="secondary"
                 source={Track.Source.ScreenShare}
-                pressed={screenShareToggle.enabled}
-                disabled={screenShareToggle.pending}
-                onPressedChange={screenShareToggle.toggle}
+                pressed={screenShareControl?.pressed ?? screenShareToggle.enabled}
+                pending={screenShareControl?.pending}
+                disabled={screenShareControl?.pending ?? screenShareToggle.pending}
+                onPressedChange={screenShareControl?.onPressedChange ?? screenShareToggle.toggle}
                 className="relative w-auto"
               />
             </div>
