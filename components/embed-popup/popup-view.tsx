@@ -78,8 +78,11 @@ export const PopupView = ({
   const [chatOpen, setChatOpen] = useState(false);
   const { messages, send } = useChatAndTranscription();
   // TLZ-561. Owns the capability attribute, the consent prompt and the screen track.
-  // The allowed surfaces come from the token route, which resolved them from org policy.
+  // Both values come from the token route, which resolved org policy and minted the grant
+  // to match: an organization without the feature is never offered the prompt at all,
+  // rather than being shown one whose publish the token would then refuse.
   const { consentRequest, acceptConsent, declineConsent } = useScreenshareSession({
+    enabled: connectionCapabilities?.screenshare === true,
     allowedSurfaces: connectionCapabilities?.allowedSurfaces,
   });
 

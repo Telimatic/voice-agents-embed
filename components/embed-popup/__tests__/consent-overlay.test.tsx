@@ -89,9 +89,32 @@ describe('ConsentOverlay', () => {
     expect(screen.getByText('This request expires in 25s.')).toBeInTheDocument();
   });
 
+  it('keeps focus inside the dialog, as aria-modal promises', () => {
+    renderOverlay();
+    const dialog = screen.getByRole('dialog');
+    const share = screen.getByRole('button', { name: 'Share' });
+    const notNow = screen.getByRole('button', { name: 'Not now' });
+
+    notNow.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(share).toHaveFocus();
+
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(notNow).toHaveFocus();
+  });
+
   it('tells the caller to answer the browser picker once Share is pressed', () => {
     renderOverlay({ capturing: true });
     expect(screen.getByRole('button', { name: /Choose what to share/i })).toBeDisabled();
     expect(screen.getByText(/Pick a tab, window or screen/i)).toBeInTheDocument();
+  });
+
+  it('cannot be declined once the browser picker is open', () => {
+    // Declining here would answer the agent "no share" while a share the caller is still
+    // choosing may yet arrive.
+    const { onDecline } = renderOverlay({ capturing: true });
+    expect(screen.getByRole('button', { name: 'Not now' })).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onDecline).not.toHaveBeenCalled();
   });
 });

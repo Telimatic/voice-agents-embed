@@ -62,11 +62,46 @@ export function ConsentOverlay({
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       if (event.key === 'Escape') {
+        // While the browser's own picker is open the answer is no longer ours to give:
+        // the request has been accepted and only the picker can decide what happens next.
+        if (capturing) {
+          return;
+        }
         event.stopPropagation();
         onDecline();
+        return;
+      }
+
+      // aria-modal is a promise that focus stays inside; Tab is where that promise is
+      // kept or broken.
+      if (event.key !== 'Tab') {
+        return;
+      }
+      const panel = panelRef.current;
+      if (!panel) {
+        return;
+      }
+      const focusable = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      );
+      if (focusable.length === 0) {
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (event.shiftKey && (active === first || active === panel)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
       }
     },
-    [onDecline]
+    [capturing, onDecline]
   );
 
   return (
@@ -102,7 +137,9 @@ export function ConsentOverlay({
         <Button variant="primary" size="sm" onClick={onAccept} disabled={capturing}>
           {capturing ? 'Choose what to share…' : 'Share'}
         </Button>
-        <Button variant="outline" size="sm" onClick={onDecline}>
+        {/* Locked while the picker is open: declining here would answer the agent "no
+            share" while a share the caller is still choosing may yet arrive. */}
+        <Button variant="outline" size="sm" onClick={onDecline} disabled={capturing}>
           Not now
         </Button>
       </div>

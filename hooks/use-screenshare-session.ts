@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type LocalTrackPublication,
   RoomEvent,
+  RpcError,
   type RpcInvocationData,
   Track,
 } from 'livekit-client';
@@ -11,12 +12,14 @@ import { useRoomContext } from '@livekit/components-react';
 import { canCaptureDisplay } from '@/lib/screenshare-capability';
 import {
   ATTR_CAPABLE,
+  type ConsentResult,
   RPC_REQUEST_CONSENT,
   RPC_STOP,
   type RequestConsentPayload,
   type RequestConsentResponse,
   SCREENSHARE_PROTOCOL_VERSION,
   type ShareSurface,
+  type StopReason,
   type StopResponse,
   isCurrentVersion,
 } from '@/lib/screenshare-protocol';
@@ -25,9 +28,12 @@ import {
  * TLZ-561. Every piece of screenshare state the widget owns: the capability it
  * advertises, the consent prompt, and the screen track itself.
  *
- * The single rule this hook exists to enforce is that consent is answered only AFTER
- * the track is published. Answering `granted` any earlier is what makes a picker the
- * caller dismissed look, to the agent, like a live share it then waits on.
+ * Two rules this hook exists to enforce, and they are the same rule twice:
+ *  - consent is answered only AFTER the track is published, so a picker the caller
+ *    dismissed never looks like a live share the agent then waits on; and
+ *  - whatever answers the request first owns the outcome, so a share that started after
+ *    the agent was told "no share" is torn down rather than left publishing. A live
+ *    track the agent believes was cancelled is the same defect wearing the other face.
  */
 
 /** Preference order, least invasive first. Also the canonical surface list. */
@@ -37,6 +43,11 @@ export const DEFAULT_ALLOWED_SURFACES: ShareSurface[] = SURFACE_PREFERENCE;
 
 /** Used when the agent's request does not carry its own `timeout_seconds`. */
 export const DEFAULT_CONSENT_TIMEOUT_SECONDS = 30;
+/** `timeout_seconds` comes from the peer, so it is bounded rather than trusted. */
+export const MIN_CONSENT_TIMEOUT_SECONDS = 5;
+export const MAX_CONSENT_TIMEOUT_SECONDS = 120;
+/** Headroom for the answer to travel back inside the caller's `responseTimeout`. */
+const RESPONSE_TRAVEL_SECONDS = 1;
 
 export interface ConsentRequest {
   /** The surfaces this caller may choose between: the agent's scope, narrowed by policy. */
@@ -49,8 +60,21 @@ export interface ConsentRequest {
 }
 
 export interface UseScreenshareSessionOptions {
+  /**
+   * From the token route (`capabilities.screenshare`), which resolved org policy and
+   * minted the grant to match. Defaults to false: the widget offers nothing until it has
+   * been told the organization has the feature.
+   */
+  enabled?: boolean;
   /** From the token route (`capabilities.allowedSurfaces`), which resolved org policy. */
   allowedSurfaces?: ShareSurface[];
+  /**
+   * Called once per share that ends, with why it ended. The browser's own "Stop sharing"
+   * bar is invisible outside this hook, and `isSharing` alone cannot tell a caller stop
+   * from a browser stop from an agent stop -- which is exactly what `StopReason` exists
+   * to distinguish, and what a `screenshare.notify` needs in order to be true.
+   */
+  onStopped?: (reason: StopReason) => void;
 }
 
 export interface ScreenshareSession {
@@ -59,7 +83,8 @@ export interface ScreenshareSession {
   acceptConsent: () => Promise<void>;
   declineConsent: () => void;
   startShare: () => Promise<RequestConsentResponse>;
-  stopShare: () => Promise<void>;
+  /** Resolves true only if the track really went down. */
+  stopShare: (reason?: StopReason) => Promise<boolean>;
 }
 
 /**
@@ -99,6 +124,31 @@ export function negotiateSurfaces(
   return narrowed.length ? narrowed : allowList;
 }
 
+/**
+ * How long the prompt may stand. Bounded at both ends because `timeout_seconds` arrives
+ * from the peer, and capped again by the caller's own `responseTimeout` -- LiveKit's
+ * default is 10s, and a prompt that outlives the window the agent is listening on
+ * produces an answer nobody receives while the caller believes they are still deciding.
+ */
+export function consentWindowSeconds(
+  requestedSeconds: unknown,
+  responseTimeoutMs: unknown
+): number {
+  const requested = Number(requestedSeconds);
+  const asked =
+    Number.isFinite(requested) && requested > 0 ? requested : DEFAULT_CONSENT_TIMEOUT_SECONDS;
+  let seconds = Math.min(Math.max(asked, MIN_CONSENT_TIMEOUT_SECONDS), MAX_CONSENT_TIMEOUT_SECONDS);
+
+  const window = Number(responseTimeoutMs);
+  if (Number.isFinite(window) && window > 0) {
+    const usable = Math.floor(window / 1000) - RESPONSE_TRAVEL_SECONDS;
+    if (usable > 0) {
+      seconds = Math.min(seconds, usable);
+    }
+  }
+  return seconds;
+}
+
 function parsePayload(raw: string | undefined): Partial<RequestConsentPayload> {
   try {
     const parsed = JSON.parse(raw ?? '{}');
@@ -124,17 +174,32 @@ export function useScreenshareSession(
   const [consentRequest, setConsentRequest] = useState<ConsentRequest | null>(null);
 
   const pendingRef = useRef<PendingConsent | null>(null);
+  const enabledRef = useRef<boolean>(options.enabled ?? false);
   const allowedSurfacesRef = useRef<ShareSurface[] | undefined>(options.allowedSurfaces);
   const promptSurfacesRef = useRef<ShareSurface[]>(DEFAULT_ALLOWED_SURFACES);
+  const onStoppedRef = useRef<UseScreenshareSessionOptions['onStopped']>(options.onStopped);
+  /** Set while this hook is the one taking the track down, so the reason is not guessed. */
+  const stopReasonRef = useRef<StopReason | null>(null);
+  /** How the outstanding request was answered, when something other than the caller answered it. */
+  const settledResultRef = useRef<ConsentResult | null>(null);
+
+  useEffect(() => {
+    enabledRef.current = options.enabled ?? false;
+  }, [options.enabled]);
 
   useEffect(() => {
     allowedSurfacesRef.current = options.allowedSurfaces;
   }, [options.allowedSurfaces]);
 
+  useEffect(() => {
+    onStoppedRef.current = options.onStopped;
+  }, [options.onStopped]);
+
   /** Resolve the outstanding RPC exactly once and take the overlay down. */
   const settle = useCallback((response: RequestConsentResponse) => {
     const pending = pendingRef.current;
     pendingRef.current = null;
+    settledResultRef.current = response.result;
     setConsentRequest(null);
     if (pending?.timer) {
       clearTimeout(pending.timer);
@@ -176,20 +241,32 @@ export function useScreenshareSession(
     [room]
   );
 
-  const stopShare = useCallback(async () => {
-    try {
-      await room.localParticipant.setScreenShareEnabled(false);
-    } catch (err) {
-      // Nothing here may end or degrade the audio session: a stop that fails leaves the
-      // voice call untouched and the widget's own state honest.
-      console.warn('[screenshare] could not stop the screen track', err);
-    } finally {
-      setIsSharing(false);
-    }
-  }, [room]);
+  const stopShare = useCallback(
+    async (reason: StopReason = 'caller_stop'): Promise<boolean> => {
+      stopReasonRef.current = reason;
+      try {
+        await room.localParticipant.setScreenShareEnabled(false);
+        // The unpublish event reports the reason; if none was emitted there was no track
+        // to take down, and there is nothing to report either.
+        setIsSharing(false);
+        return true;
+      } catch (err) {
+        // A stop that did not happen is not reported as one: the track may still be
+        // live, and `isSharing` has to keep saying so. Nothing here may end or degrade
+        // the audio session, so the failure is logged rather than thrown.
+        stopReasonRef.current = null;
+        console.warn('[screenshare] could not stop the screen track', err);
+        return false;
+      }
+    },
+    [room]
+  );
 
   /** Caller-initiated share, with no agent request outstanding. */
   const startShare = useCallback(async (): Promise<RequestConsentResponse> => {
+    if (!enabledRef.current) {
+      return { v: SCREENSHARE_PROTOCOL_VERSION, result: 'failed', reason: 'not_permitted' };
+    }
     if (!capable) {
       return {
         v: SCREENSHARE_PROTOCOL_VERSION,
@@ -204,23 +281,42 @@ export function useScreenshareSession(
 
   const acceptConsent = useCallback(async () => {
     const pending = pendingRef.current;
+    if (!pending) {
+      return;
+    }
     // Stop the countdown the moment the caller answers. A timeout firing behind an open
     // picker would answer the agent twice, and the second answer would be a lie.
-    if (pending?.timer) {
+    if (pending.timer) {
       clearTimeout(pending.timer);
       pending.timer = null;
     }
     setConsentRequest((request) => (request ? { ...request, capturing: true } : request));
 
     const response = await accept(promptSurfacesRef.current);
-    setIsSharing(response.result === 'granted');
 
-    if (pendingRef.current) {
-      settle(response);
-    } else {
+    // Whoever answered first owns the outcome. The agent's `screenshare.stop`, and the
+    // panel closing, can both land while the picker is open -- and by then the agent has
+    // been told there is no share. So there must not be one: a track that arrives after
+    // that answer is taken straight back down rather than left publishing a screen the
+    // agent believes was never shared.
+    if (pendingRef.current !== pending) {
+      if (response.result === 'granted') {
+        const stopped = await stopShare(
+          settledResultRef.current === 'declined' ? 'caller_stop' : 'agent_end'
+        );
+        if (!stopped) {
+          console.error(
+            '[screenshare] a screen track was published after the request was already answered, and could not be stopped'
+          );
+        }
+      }
       setConsentRequest(null);
+      return;
     }
-  }, [accept, settle]);
+
+    setIsSharing(response.result === 'granted');
+    settle(response);
+  }, [accept, settle, stopShare]);
 
   const declineConsent = useCallback(() => {
     settle({ v: SCREENSHARE_PROTOCOL_VERSION, result: 'declined' });
@@ -239,6 +335,17 @@ export function useScreenshareSession(
           v: SCREENSHARE_PROTOCOL_VERSION,
           result: 'failed',
           reason: 'protocol_version_mismatch',
+        });
+      }
+
+      // The token is the enforcement point, but a caller whose organization does not have
+      // the feature must never see the prompt -- let alone the browser's own picker --
+      // only for the publish to be refused afterwards.
+      if (!enabledRef.current) {
+        return respond({
+          v: SCREENSHARE_PROTOCOL_VERSION,
+          result: 'failed',
+          reason: 'not_permitted',
         });
       }
 
@@ -261,9 +368,12 @@ export function useScreenshareSession(
       }
 
       const surfaces = negotiateSurfaces(payload.scope, allowedSurfacesRef.current);
-      const requested = Number(payload.timeout_seconds);
-      const timeoutSeconds =
-        Number.isFinite(requested) && requested > 0 ? requested : DEFAULT_CONSENT_TIMEOUT_SECONDS;
+      const timeoutSeconds = consentWindowSeconds(payload.timeout_seconds, data?.responseTimeout);
+      if (Number(payload.timeout_seconds) > timeoutSeconds) {
+        console.warn(
+          `[screenshare] consent prompt shortened to ${timeoutSeconds}s; the agent asked for ${payload.timeout_seconds}s but is listening for ${data?.responseTimeout}ms`
+        );
+      }
       promptSurfacesRef.current = surfaces;
 
       return new Promise<string>((resolve) => {
@@ -287,19 +397,46 @@ export function useScreenshareSession(
   );
 
   // Agent -> widget: "stop sharing".
-  const handleStop = useCallback(async (): Promise<string> => {
-    // A prompt still on screen means no share ever started. Close it and tell the agent
-    // the request ended, rather than leaving a dead overlay in front of the caller.
-    if (pendingRef.current) {
-      settle({ v: SCREENSHARE_PROTOCOL_VERSION, result: 'cancelled', reason: 'agent_end' });
-    }
-    await stopShare();
-    const response: StopResponse = { v: SCREENSHARE_PROTOCOL_VERSION, stopped: true };
-    return JSON.stringify(response);
-  }, [settle, stopShare]);
+  const handleStop = useCallback(
+    async (data: RpcInvocationData): Promise<string> => {
+      const versionOk = isCurrentVersion(parsePayload(data?.payload));
+
+      // A prompt still on screen means no share ever started. Close it and tell the agent
+      // the request ended. `cancelled` is the caller's own dismissal of the picker, so an
+      // agent-side withdrawal is `failed` with the reason that says who ended it --
+      // attributing it to the caller would put a plausible falsehood in the audit row.
+      if (pendingRef.current) {
+        settle({ v: SCREENSHARE_PROTOCOL_VERSION, result: 'failed', reason: 'agent_end' });
+      }
+
+      // Deliberately asymmetric with requestConsent: refusing to START on a version we do
+      // not understand is safe, refusing to STOP is not. A privacy control fails toward
+      // stopping, so the track goes down first and the mismatch is reported after.
+      const stopped = await stopShare('agent_end');
+
+      if (!versionOk) {
+        throw new RpcError(
+          RpcError.ErrorCode.UNSUPPORTED_VERSION,
+          'screenshare.stop: protocol_version_mismatch'
+        );
+      }
+      if (!stopped) {
+        // Never answer `stopped: true` for a stop that did not happen.
+        throw new RpcError(
+          RpcError.ErrorCode.APPLICATION_ERROR,
+          'screenshare.stop: the screen track could not be stopped'
+        );
+      }
+
+      const response: StopResponse = { v: SCREENSHARE_PROTOCOL_VERSION, stopped: true };
+      return JSON.stringify(response);
+    },
+    [settle, stopShare]
+  );
 
   // A4: advertise the capability as soon as there is a session to advertise it on, so the
-  // agent knows before it offers rather than after the caller agrees.
+  // agent knows before it offers rather than after the caller agrees. This says what the
+  // BROWSER can do; whether the organization may is the token's business, not this flag's.
   useEffect(() => {
     if (!room) {
       return;
@@ -353,17 +490,23 @@ export function useScreenshareSession(
     };
   }, [room, handleRequestConsent, handleStop]);
 
-  // The browser's own "Stop sharing" bar, and the end of the session, both end the share
-  // without going through this hook. Track publication state is the source of truth.
+  // The browser's own "Stop sharing" bar ends the share without going through this hook.
+  // Track publication state is the source of truth, and this is the only place a stop is
+  // reported, so one ended share produces exactly one `onStopped`.
   useEffect(() => {
     if (!room) {
       return;
     }
     const onUnpublished = (publication: LocalTrackPublication) => {
-      if (publication.source === Track.Source.ScreenShare) {
-        setIsSharing(false);
+      if (publication.source !== Track.Source.ScreenShare) {
+        return;
       }
+      setIsSharing(false);
+      const reason = stopReasonRef.current ?? 'browser_stop';
+      stopReasonRef.current = null;
+      onStoppedRef.current?.(reason);
     };
+    // The session ending is not a stop anyone can act on: there is no room left to notify.
     const onDisconnected = () => setIsSharing(false);
 
     room.on(RoomEvent.LocalTrackUnpublished, onUnpublished);
@@ -375,7 +518,8 @@ export function useScreenshareSession(
   }, [room]);
 
   // The panel can close with a request still outstanding; the agent is told rather than
-  // left waiting for a promise nobody will ever settle.
+  // left waiting for a promise nobody will ever settle. A capture still in flight is
+  // caught by the ownership check in acceptConsent, which runs even after unmount.
   useEffect(
     () => () => {
       if (pendingRef.current) {
