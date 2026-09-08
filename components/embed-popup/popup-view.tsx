@@ -15,8 +15,10 @@ import {
 import type { ConnectionDetails } from '@/app/api/connection-details/route';
 import { ActionBar } from '@/components/embed-popup/action-bar';
 import { AudioVisualizer } from '@/components/embed-popup/audio-visualizer';
+import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
 import { Transcript } from '@/components/embed-popup/transcript';
 import useChatAndTranscription from '@/hooks/use-chat-and-transcription';
+import { useScreenshareSession } from '@/hooks/use-screenshare-session';
 import { useDebugMode } from '@/hooks/useDebug';
 import type { AppConfig, EmbedErrorDetails } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -75,6 +77,11 @@ export const PopupView = ({
   const cameraTrack: TrackReference | undefined = useLocalTrackRef(Track.Source.Camera);
   const [chatOpen, setChatOpen] = useState(false);
   const { messages, send } = useChatAndTranscription();
+  // TLZ-561. Owns the capability attribute, the consent prompt and the screen track.
+  // The allowed surfaces come from the token route, which resolved them from org policy.
+  const { consentRequest, acceptConsent, declineConsent } = useScreenshareSession({
+    allowedSurfaces: connectionCapabilities?.allowedSurfaces,
+  });
 
   const { supportsChatInput, supportsVideoInput, supportsScreenShare } = appConfig;
   const capabilities = {
@@ -294,6 +301,22 @@ export const PopupView = ({
             onChatOpenChange={setChatOpen}
           />
         </motion.div>
+
+        {/* Screenshare consent (TLZ-561). Panel-filling: agreeing to share a screen is
+            not a decision to make out of the corner of an eye. */}
+        {consentRequest && (
+          <ConsentOverlay
+            agentName={appConfig.agentName}
+            surfaces={consentRequest.surfaces}
+            timeoutSeconds={consentRequest.timeoutSeconds}
+            expiresAt={consentRequest.expiresAt}
+            capturing={consentRequest.capturing}
+            onAccept={() => {
+              void acceptConsent();
+            }}
+            onDecline={declineConsent}
+          />
+        )}
       </div>
     </div>
   );
