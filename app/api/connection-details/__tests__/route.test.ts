@@ -162,6 +162,87 @@ describe('POST /api/connection-details — screenshare capability', () => {
     expect(grant.canUpdateOwnMetadata).toBe(true);
   });
 
+  /**
+   * TLZ-561 final review M-1. `sanitizeAllowedSurfaces` drops every value it does not
+   * recognize; before the fix, an `allowed_surfaces` whose entries were ALL unrecognized
+   * became `[]`, and `[]` is falsy-length — so `preferredSurface`/`negotiateSurfaces`
+   * (hooks/use-screenshare-session.ts) read it as "no policy" and fell back to
+   * DEFAULT_ALLOWED_SURFACES, i.e. browser AND window AND monitor. A narrowing function
+   * that widens to the most permissive set on bad input is the one fail-OPEN path in a
+   * file whose every other branch fails closed.
+   *
+   * Asserted through the ROUTE rather than against sanitizeAllowedSurfaces directly,
+   * because the consequence that matters is the minted grant: canPublishSources derives
+   * SCREEN_SHARE from `enabled`, never from the surface list, so a widened surface list
+   * arrived with a token that already authorized the capture.
+   */
+  it.each([
+    ['every entry unrecognized', ['desktop', 'tab', 'application']],
+    ['a single unrecognized entry', ['desktop']],
+    ['an empty list', []],
+    ['a list of non-strings', [1, null, { surface: 'browser' }]],
+  ])(
+    'enabled with an unusable allowed_surfaces (%s): reports disabled and withholds SCREEN_SHARE, never the full surface set',
+    async (_label, allowed_surfaces) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          jsonResponse({
+            organization_id: 'org-1',
+            screenshare: { enabled: true, reason: 'ok', config: { allowed_surfaces } },
+          })
+        )
+      );
+
+      const res = await POST(postRequest({ agentId: 'agent-1' }));
+      assertResponse(res);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+
+      expect(data.capabilities.screenshare).toBe(false);
+      // Specifically NOT the permissive fallback: this is the exact widening being pinned.
+      expect(data.capabilities.allowedSurfaces).toBeUndefined();
+
+      const grant = decodeGrant(data.participantToken);
+      expect(grant.canPublishSources).not.toContain(trackSourceToString(TrackSource.SCREEN_SHARE));
+      // The call itself is untouched — a policy this build cannot read costs the feature,
+      // never the conversation.
+      expect(grant.canPublishSources).toEqual([
+        trackSourceToString(TrackSource.CAMERA),
+        trackSourceToString(TrackSource.MICROPHONE),
+      ]);
+    }
+  );
+
+  it('enabled with a PARTLY unrecognized allowed_surfaces: keeps the recognized ones and stays on', async () => {
+    // The narrowing behaviour must survive the fix above: dropping unknown entries is not
+    // the same as refusing the whole list, and a future surface name this build predates
+    // must not switch the feature off for surfaces it does understand.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          organization_id: 'org-1',
+          screenshare: {
+            enabled: true,
+            reason: 'ok',
+            config: { allowed_surfaces: ['browser', 'hologram'] },
+          },
+        })
+      )
+    );
+
+    const res = await POST(postRequest({ agentId: 'agent-1' }));
+    assertResponse(res);
+    const data = await res.json();
+
+    expect(data.capabilities.screenshare).toBe(true);
+    expect(data.capabilities.allowedSurfaces).toEqual(['browser']);
+    expect(decodeGrant(data.participantToken).canPublishSources).toContain(
+      trackSourceToString(TrackSource.SCREEN_SHARE)
+    );
+  });
+
   it('dashboard unreachable: still mints an audio-only token, 200, and logs a warning', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed: ECONNREFUSED')));

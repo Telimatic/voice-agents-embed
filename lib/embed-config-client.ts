@@ -23,12 +23,22 @@ const KNOWN_SURFACES: readonly string[] = protocolFixture.enums.shareSurface;
 /** Keeps only values this side actually recognizes as a ShareSurface. Anything else
  *  (a typo, a future surface this widget build predates, a malformed response) is
  *  dropped rather than cast through — an unvalidated string could otherwise reach a
- *  getDisplayMedia-shaped API downstream. */
+ *  getDisplayMedia-shaped API downstream.
+ *
+ *  Returns `undefined` when nothing survives — including for an array whose every entry
+ *  was rejected. `[]` would be worse than useless here: `preferredSurface` and
+ *  `negotiateSurfaces` (hooks/use-screenshare-session.ts) both read `allowedSurfaces?.length`
+ *  as falsy and fall back to DEFAULT_ALLOWED_SURFACES, so an empty list from the one
+ *  function whose whole job is to NARROW would silently widen the permitted set to
+ *  browser, window AND monitor. `undefined` is not itself "nothing permitted" either —
+ *  it means "no usable list", which `fetchScreenshareConfig` below turns into
+ *  `enabled: false`, which is. */
 function sanitizeAllowedSurfaces(value: unknown): ShareSurface[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  return value.filter(
+  const known = value.filter(
     (v): v is ShareSurface => typeof v === 'string' && KNOWN_SURFACES.includes(v)
   );
+  return known.length ? known : undefined;
 }
 
 export interface WidgetScreenshareConfig {
@@ -90,10 +100,23 @@ export async function fetchScreenshareConfig(agentId: string): Promise<WidgetScr
     if (!res.ok) return { enabled: false, reason: `http_${res.status}` };
     const json = await res.json();
     const ss = json?.screenshare;
+    const allowedSurfaces = sanitizeAllowedSurfaces(ss?.config?.allowed_surfaces);
+    if (ss?.enabled === true && !allowedSurfaces) {
+      // "Screenshare is on, but here are no surfaces this build recognizes" is not a
+      // usable answer, and it must not resolve to the most permissive set. Refuse the
+      // feature instead, the same way every other bad answer in this file is refused —
+      // which also withdraws SCREEN_SHARE from the minted grant
+      // (app/api/connection-details/route.ts derives canPublishSources from `enabled`,
+      // NOT from this list), so the token cannot permit what the policy could not name.
+      // The dashboard already refuses to report enabled alongside an unusable surface
+      // list (app/api/embed/widget-config/route.ts), so this is defence in depth against
+      // a peer changing; it is not the only thing standing between a caller and a share.
+      return { enabled: false, reason: 'invalid_surfaces' };
+    }
     return {
       enabled: ss?.enabled === true,
       reason: typeof ss?.reason === 'string' ? ss.reason : 'unknown',
-      allowedSurfaces: sanitizeAllowedSurfaces(ss?.config?.allowed_surfaces),
+      allowedSurfaces,
     };
   } catch (err) {
     console.warn('screenshare config unavailable, continuing audio-only:', err);
