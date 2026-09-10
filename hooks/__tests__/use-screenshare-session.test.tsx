@@ -778,7 +778,7 @@ describe('useScreenshareSession', () => {
       expect(deniedHook.result.current.canShare).toBe(false);
 
       stubNavigator({ capable: false });
-      const incapable = createFakeRoom();
+      const incapable = createGrantedRoom();
       const incapableHook = renderSession(incapable.room);
       act(() => incapable.addParticipant(fakeAgent()));
       await waitFor(() => expect(incapableHook.result.current.agentReady).toBe(true));
