@@ -8,6 +8,7 @@ import {
   RPC_REQUEST_CONSENT,
   RPC_STOP,
   SCREENSHARE_PROTOCOL_VERSION,
+  SHARE_SURFACES,
   type StopReason,
   isCurrentVersion,
 } from '../screenshare-protocol';
@@ -67,6 +68,20 @@ describe('screenshare protocol constants match the shared fixture', () => {
     for (const value of fixture.enums.stopReason) {
       expect(ALL_STOP_REASONS).toContain(value);
     }
+  });
+
+  it('SHARE_SURFACES matches the fixture, in order', () => {
+    // The comment on SHARE_SURFACES claims it is "asserted in screenshare-protocol.test.ts",
+    // and until this test it was not. Before the single-definition refactor the list was
+    // READ from fixture.enums.shareSurface, so parity held by construction; it is now a
+    // hand-typed literal, and the dashboard's widget-config route and the worker's
+    // screenshare_protocol.py keep their own copies against the same fixture.
+    //
+    // toEqual, not toContain in both directions like the enums above: order is load-bearing
+    // here. preferredSurface walks this list to pick the LEAST invasive surface the
+    // caller's policy allows, so a reordered list silently changes what a caller is asked
+    // to share.
+    expect([...SHARE_SURFACES]).toEqual(fixture.enums.shareSurface);
   });
 
   it('requestConsent example matches the RequestConsentPayload/Response shapes', () => {
