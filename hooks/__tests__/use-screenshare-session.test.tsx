@@ -13,6 +13,7 @@ import {
   useScreenshareSession,
 } from '@/hooks/use-screenshare-session';
 import {
+  ATTR_ALLOWED_SURFACES,
   ATTR_ENABLED,
   RPC_REQUEST_CONSENT,
   RPC_STOP,
@@ -37,8 +38,15 @@ function renderSession(room: FakeRoom, options: UseScreenshareSessionOptions = {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <RoomContext.Provider value={room as unknown as Room}>{children}</RoomContext.Provider>
   );
-  // The token route said this organization has the feature unless a test says otherwise.
-  return renderHook(() => useScreenshareSession({ enabled: true, ...options }), { wrapper });
+  // The worker has widened the permission unless a test says otherwise.
+  return renderHook(() => useScreenshareSession(options), { wrapper });
+}
+
+/** A room whose caller may already publish a screen: the common case in this file. */
+function createGrantedRoom() {
+  const fake = createFakeRoom();
+  fake.grantScreenShare();
+  return fake;
 }
 
 function consentPayload(overrides: Record<string, unknown> = {}) {
@@ -119,7 +127,7 @@ describe('useScreenshareSession', () => {
   beforeEach(() => stubNavigator({ capable: true }));
 
   it('registers both RPC methods on connect', async () => {
-    const { room, rpcHandlers } = createFakeRoom();
+    const { room, rpcHandlers } = createGrantedRoom();
     renderSession(room);
 
     await waitFor(() => expect(rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
@@ -133,7 +141,7 @@ describe('useScreenshareSession', () => {
     // attribute keys — so that permission also let a tampered page write the `caller` /
     // `sip.*` keys the worker reads as caller identity. If this assertion ever fails, the
     // grant has to come back, and the spoofing path comes back with it.
-    const { room, rpcHandlers, setAttributes } = createFakeRoom();
+    const { room, rpcHandlers, setAttributes } = createGrantedRoom();
     renderSession(room);
 
     await waitFor(() => expect(rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
@@ -141,7 +149,7 @@ describe('useScreenshareSession', () => {
   });
 
   it('answers granted with the surface actually chosen and the track sid, only after publish', async () => {
-    const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
     const { result } = renderSession(room);
 
     const rpc = invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);
@@ -170,7 +178,7 @@ describe('useScreenshareSession', () => {
   });
 
   it('reports the surface the caller actually picked, not the one requested', async () => {
-    const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
     setScreenShareEnabled.mockResolvedValueOnce(fakePublication('monitor', 'TR_screen_9'));
     const { result } = renderSession(room);
 
@@ -186,7 +194,7 @@ describe('useScreenshareSession', () => {
   });
 
   it('answers cancelled when the caller dismisses the browser picker', async () => {
-    const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
     const denied = Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' });
     setScreenShareEnabled.mockRejectedValueOnce(denied);
     const { result } = renderSession(room);
@@ -204,7 +212,7 @@ describe('useScreenshareSession', () => {
   });
 
   it('answers failed when the capture throws for any other reason', async () => {
-    const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
     const broken = Object.assign(new Error('no capture device'), { name: 'NotFoundError' });
     setScreenShareEnabled.mockRejectedValueOnce(broken);
     const { result } = renderSession(room);
@@ -221,7 +229,7 @@ describe('useScreenshareSession', () => {
   });
 
   it('answers failed when the publish resolves without a publication', async () => {
-    const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
     setScreenShareEnabled.mockResolvedValueOnce(undefined);
     const { result } = renderSession(room);
 
@@ -238,7 +246,7 @@ describe('useScreenshareSession', () => {
   });
 
   it('answers declined when the caller presses Not now, without opening a picker', async () => {
-    const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
     const { result } = renderSession(room);
 
     const rpc = invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);
@@ -254,7 +262,7 @@ describe('useScreenshareSession', () => {
   it('answers timeout when the prompt is left untouched for 30 seconds', async () => {
     vi.useFakeTimers();
     try {
-      const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+      const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
       const { result } = renderSession(room);
 
       const rpc = invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);
@@ -278,7 +286,7 @@ describe('useScreenshareSession', () => {
 
   it('answers unsupported on a device that cannot capture, without ever opening a picker', async () => {
     stubNavigator({ capable: false });
-    const { room, rpcHandlers, setScreenShareEnabled, setAttributes } = createFakeRoom();
+    const { room, rpcHandlers, setScreenShareEnabled, setAttributes } = createGrantedRoom();
     const { result } = renderSession(room);
 
     // The capability now rides the token, so an incapable browser refuses at the RPC
@@ -292,9 +300,9 @@ describe('useScreenshareSession', () => {
     expect(result.current.consentRequest).toBeNull();
   });
 
-  it('never prompts an organization the token did not grant screenshare to', async () => {
+  it('never prompts before the worker has widened the permission', async () => {
     const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
-    const { result } = renderSession(room, { enabled: false });
+    const { result } = renderSession(room);
 
     const response = await parse(invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!));
     expect(response.result).toBe('failed');
@@ -311,8 +319,44 @@ describe('useScreenshareSession', () => {
     expect(setScreenShareEnabled).not.toHaveBeenCalled();
   });
 
+  it('honours a request once the permission arrives, and refuses again if it is revoked', async () => {
+    stubNavigator({ capable: true });
+    const fake = createFakeRoom();
+    fake.addParticipant(fakeAgent());
+    const { result } = renderSession(fake.room);
+    await waitFor(() => expect(fake.rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
+    expect(result.current.canShare).toBe(false);
+
+    act(() => fake.grantScreenShare());
+    await waitFor(() => expect(result.current.canShare).toBe(true));
+    const rpc = invokeConsent(fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!);
+    await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
+    act(() => result.current.declineConsent());
+    expect((await parse(rpc)).result).toBe('declined');
+
+    act(() => fake.revokeScreenShare());
+    await waitFor(() => expect(result.current.canShare).toBe(false));
+    const refused = await parse(invokeConsent(fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!));
+    expect(refused).toMatchObject({ result: 'failed', reason: 'not_permitted' });
+    expect(fake.setScreenShareEnabled).not.toHaveBeenCalled();
+  });
+
+  it('startShare refuses before the permission and works after', async () => {
+    stubNavigator({ capable: true });
+    const fake = createFakeRoom();
+    fake.addParticipant(fakeAgent());
+    const { result } = renderSession(fake.room);
+    await waitFor(() => expect(fake.rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
+    let response = await act(() => result.current.startShare());
+    expect(response).toMatchObject({ result: 'failed', reason: 'not_permitted' });
+    act(() => fake.grantScreenShare());
+    await waitFor(() => expect(result.current.canShare).toBe(true));
+    response = await act(() => result.current.startShare());
+    expect(response.result).toBe('granted');
+  });
+
   it('refuses a request stamped with a different protocol version', async () => {
-    const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
     renderSession(room);
 
     const response = await parse(
@@ -324,18 +368,24 @@ describe('useScreenshareSession', () => {
   });
 
   it('narrows the offered surfaces to what policy allows', async () => {
-    const { room, rpcHandlers } = createFakeRoom();
+    const fake = createGrantedRoom();
     const surfaces: ShareSurface[] = ['window'];
-    const { result } = renderSession(room, { allowedSurfaces: surfaces });
+    fake.addParticipant(
+      fakeAgent('agent-1', {
+        [ATTR_ENABLED]: 'true',
+        [ATTR_ALLOWED_SURFACES]: surfaces.join(','),
+      })
+    );
+    const { result } = renderSession(fake.room);
 
-    invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);
+    invokeConsent(fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!);
     await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
     expect(result.current.consentRequest?.surfaces).toEqual(['window']);
   });
 
   describe('the prompt window', () => {
     it('never outlives the response timeout the agent is listening on', async () => {
-      const { room, rpcHandlers } = createFakeRoom();
+      const { room, rpcHandlers } = createGrantedRoom();
       const { result } = renderSession(room);
 
       // LiveKit's default responseTimeout is 10s; a 30s prompt would answer into the void.
@@ -345,7 +395,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('bounds a timeout_seconds the peer sends rather than trusting it', async () => {
-      const { room, rpcHandlers } = createFakeRoom();
+      const { room, rpcHandlers } = createGrantedRoom();
       const { result } = renderSession(room);
 
       invokeConsent(
@@ -359,7 +409,7 @@ describe('useScreenshareSession', () => {
 
     it('says so when it shortens the default window', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const { room, rpcHandlers } = createFakeRoom();
+      const { room, rpcHandlers } = createGrantedRoom();
       const { result } = renderSession(room);
 
       // No `timeout_seconds` at all. Comparing the raw field would compare NaN, and the
@@ -378,7 +428,7 @@ describe('useScreenshareSession', () => {
 
   describe('screenshare.stop', () => {
     it('stops the track and closes an open prompt, attributing the end to the agent', async () => {
-      const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+      const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
       const { result } = renderSession(room);
 
       const rpc = invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);
@@ -401,7 +451,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('does not report a stop that did not happen', async () => {
-      const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+      const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
       const hook = renderSession(room);
       await shareUntilGranted(rpcHandlers, hook);
       expect(hook.result.current.isSharing).toBe(true);
@@ -418,7 +468,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('stops the track even on a version it does not understand, then reports the mismatch', async () => {
-      const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+      const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
       const hook = renderSession(room);
       await shareUntilGranted(rpcHandlers, hook);
 
@@ -433,7 +483,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('reports a still-live track ahead of a bad version stamp', async () => {
-      const { room, rpcHandlers, setScreenShareEnabled } = createFakeRoom();
+      const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
       const hook = renderSession(room);
       await shareUntilGranted(rpcHandlers, hook);
 
@@ -451,7 +501,7 @@ describe('useScreenshareSession', () => {
 
   describe('no path leaves a live track the agent believes was cancelled', () => {
     it('tears the track down when the agent withdrew while the picker was open', async () => {
-      const fake = createFakeRoom();
+      const fake = createGrantedRoom();
       const picker = holdPicker(fake);
       const { result } = renderSession(fake.room);
 
@@ -484,7 +534,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('tears the track down when the panel closed while the picker was open', async () => {
-      const fake = createFakeRoom();
+      const fake = createGrantedRoom();
       const picker = holdPicker(fake);
       const { result, unmount } = renderSession(fake.room);
 
@@ -509,7 +559,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('stops the capture at the source when unpublishing it fails', async () => {
-      const fake = createFakeRoom();
+      const fake = createGrantedRoom();
       const picker = holdPicker(fake);
       const { result } = renderSession(fake.room);
 
@@ -538,7 +588,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('opens only one picker however many times Share is pressed', async () => {
-      const fake = createFakeRoom();
+      const fake = createGrantedRoom();
       const picker = holdPicker(fake);
       const { result } = renderSession(fake.room);
 
@@ -566,7 +616,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('leaves a newer request on screen when a superseded accept finishes', async () => {
-      const fake = createFakeRoom();
+      const fake = createGrantedRoom();
       const picker = holdPicker(fake);
       const { result } = renderSession(fake.room);
 
@@ -601,7 +651,7 @@ describe('useScreenshareSession', () => {
   describe('onStopped', () => {
     it('reports the browser bar, the caller and the agent as distinct reasons', async () => {
       const reasons: StopReason[] = [];
-      const { room, rpcHandlers } = createFakeRoom();
+      const { room, rpcHandlers } = createGrantedRoom();
       const hook = renderSession(room, { onStopped: (reason) => reasons.push(reason) });
 
       // The browser's own "Stop sharing" bar: the track ends and the SDK unpublishes it,
@@ -631,7 +681,7 @@ describe('useScreenshareSession', () => {
 
     it("never spends an agent stop reason on the caller's next browser stop", async () => {
       const reasons: StopReason[] = [];
-      const { room, rpcHandlers } = createFakeRoom();
+      const { room, rpcHandlers } = createGrantedRoom();
       const hook = renderSession(room, { onStopped: (reason) => reasons.push(reason) });
 
       // The agent withdraws while only the PROMPT is open. Nothing is published, so
@@ -656,7 +706,7 @@ describe('useScreenshareSession', () => {
 
     it('ignores tracks that are not the screen share', async () => {
       const reasons: StopReason[] = [];
-      const { room, rpcHandlers } = createFakeRoom();
+      const { room, rpcHandlers } = createGrantedRoom();
       const hook = renderSession(room, { onStopped: (reason) => reasons.push(reason) });
       await shareUntilGranted(rpcHandlers, hook);
 
@@ -673,7 +723,7 @@ describe('useScreenshareSession', () => {
 
   describe('the share control is gated on an agent that can receive the share', () => {
     it('offers nothing until such an agent is in the room', async () => {
-      const fake = createFakeRoom();
+      const fake = createGrantedRoom();
       const hook = renderSession(fake.room);
 
       // The token said yes and the browser can capture, but nobody is listening.
@@ -685,7 +735,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('sees the attribute the agent publishes AFTER it joins', async () => {
-      const fake = createFakeRoom();
+      const fake = createGrantedRoom();
       const hook = renderSession(fake.room);
 
       // This is the real sequence: the worker joins, resolves the session, and only then
@@ -699,7 +749,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('withdraws the control when that agent leaves', async () => {
-      const fake = createFakeRoom();
+      const fake = createGrantedRoom();
       const agent = fakeAgent();
       const hook = renderSession(fake.room);
       act(() => fake.addParticipant(agent));
@@ -710,7 +760,7 @@ describe('useScreenshareSession', () => {
     });
 
     it('ignores a human participant and an agent that never enabled screenshare', async () => {
-      const fake = createFakeRoom();
+      const fake = createGrantedRoom();
       const hook = renderSession(fake.room);
 
       act(() => fake.addParticipant(fakeHuman()));
@@ -722,7 +772,7 @@ describe('useScreenshareSession', () => {
 
     it('stays shut for an organization the token did not grant, and for a device that cannot capture', async () => {
       const denied = createFakeRoom();
-      const deniedHook = renderSession(denied.room, { enabled: false });
+      const deniedHook = renderSession(denied.room);
       act(() => denied.addParticipant(fakeAgent()));
       await waitFor(() => expect(deniedHook.result.current.agentReady).toBe(true));
       expect(deniedHook.result.current.canShare).toBe(false);
@@ -741,7 +791,7 @@ describe('useScreenshareSession', () => {
       vi.useFakeTimers();
       try {
         const reasons: StopReason[] = [];
-        const fake = createFakeRoom();
+        const fake = createGrantedRoom();
         const agent = fakeAgent();
         fake.remoteParticipants.set(agent.identity, agent);
         const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
@@ -770,7 +820,7 @@ describe('useScreenshareSession', () => {
       vi.useFakeTimers();
       try {
         const reasons: StopReason[] = [];
-        const fake = createFakeRoom();
+        const fake = createGrantedRoom();
         const agent = fakeAgent();
         fake.remoteParticipants.set(agent.identity, agent);
         renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
@@ -791,7 +841,7 @@ describe('useScreenshareSession', () => {
       vi.useFakeTimers();
       try {
         const reasons: StopReason[] = [];
-        const fake = createFakeRoom();
+        const fake = createGrantedRoom();
         const agent = fakeAgent();
         fake.remoteParticipants.set(agent.identity, agent);
         const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
@@ -819,7 +869,7 @@ describe('useScreenshareSession', () => {
       vi.useFakeTimers();
       try {
         const reasons: StopReason[] = [];
-        const fake = createFakeRoom();
+        const fake = createGrantedRoom();
         const agent = fakeAgent();
         fake.remoteParticipants.set(agent.identity, agent);
         const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
@@ -854,7 +904,7 @@ describe('useScreenshareSession', () => {
       vi.useFakeTimers();
       try {
         const reasons: StopReason[] = [];
-        const fake = createFakeRoom();
+        const fake = createGrantedRoom();
         const agent = fakeAgent();
         fake.remoteParticipants.set(agent.identity, agent);
         const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
@@ -886,7 +936,7 @@ describe('useScreenshareSession', () => {
       vi.useFakeTimers();
       try {
         const reasons: StopReason[] = [];
-        const fake = createFakeRoom();
+        const fake = createGrantedRoom();
         const agent = fakeAgent();
         fake.remoteParticipants.set(agent.identity, agent);
         const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
@@ -910,7 +960,7 @@ describe('useScreenshareSession', () => {
       vi.useFakeTimers();
       try {
         const reasons: StopReason[] = [];
-        const fake = createFakeRoom();
+        const fake = createGrantedRoom();
         const agent = fakeAgent();
         fake.remoteParticipants.set(agent.identity, agent);
         const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
@@ -955,7 +1005,7 @@ describe('useScreenshareSession', () => {
 
     it('does not read a reconnect republish as a stop', async () => {
       const reasons: StopReason[] = [];
-      const fake = createFakeRoom();
+      const fake = createGrantedRoom();
       const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
       await shareUntilGranted(fake.rpcHandlers, hook);
 
@@ -977,7 +1027,7 @@ describe('useScreenshareSession', () => {
   });
 
   it('answers an outstanding request rather than dangling when the widget closes', async () => {
-    const { room, rpcHandlers } = createFakeRoom();
+    const { room, rpcHandlers } = createGrantedRoom();
     const { result, unmount } = renderSession(room);
 
     const rpc = invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!);

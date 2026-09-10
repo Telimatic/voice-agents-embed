@@ -11,7 +11,6 @@ import {
   useRoomContext,
   useVoiceAssistant,
 } from '@livekit/components-react';
-import type { ConnectionDetails } from '@/app/api/connection-details/route';
 import { ActionBar } from '@/components/embed-popup/action-bar';
 import { AudioVisualizer } from '@/components/embed-popup/audio-visualizer';
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
@@ -52,9 +51,6 @@ type PopupProps = {
   disabled: boolean;
   sessionStarted: boolean;
   onEmbedError: React.Dispatch<React.SetStateAction<EmbedErrorDetails | null>>;
-  // TLZ-561. Resolved by the token route per-agent; absent before the first token comes
-  // back (or if that fetch never lands, e.g. `disabled`/pre-connect states).
-  connectionCapabilities?: ConnectionDetails['capabilities'];
 };
 
 export const PopupView = ({
@@ -62,7 +58,6 @@ export const PopupView = ({
   disabled,
   sessionStarted,
   onEmbedError,
-  connectionCapabilities,
   ref,
 }: React.ComponentProps<'div'> & PopupProps) => {
   useDebugMode();
@@ -86,24 +81,18 @@ export const PopupView = ({
   // exactly once, from its single unpublish listener, and this turns that report into the
   // notification. Sending it from anywhere else would race that listener.
   const notifyStopped = useScreenshareStopNotifier();
-  // TLZ-561. Owns the capability attribute, the consent prompt and the screen track.
-  // Both values come from the token route, which resolved org policy and minted the grant
-  // to match: an organization without the feature is never offered the prompt at all,
-  // rather than being shown one whose publish the token would then refuse.
+  // TLZ-561. Owns the consent prompt and the screen track. Whether a share may be offered
+  // is derived inside the hook from the live publish permission (widened by the worker at
+  // runtime) and the agent's attributes, so nothing is threaded in from the token route.
   const { canShare, consentRequest, acceptConsent, declineConsent, startShare, stopShare } =
-    useScreenshareSession({
-      enabled: connectionCapabilities?.screenshare === true,
-      allowedSurfaces: connectionCapabilities?.allowedSurfaces,
-      onStopped: notifyStopped,
-    });
+    useScreenshareSession({ onStopped: notifyStopped });
 
   const { supportsChatInput, supportsVideoInput } = appConfig;
   const capabilities = {
     supportsChatInput,
     supportsVideoInput,
-    // The token granted the capability, this browser can capture a display, and an agent
-    // that can receive the share is in the room. The last one is not decoration: without
-    // it the caller can start a share nobody is listening for.
+    // The worker widened the permission, this browser can capture a display, and an agent
+    // that can receive the share is in the room.
     supportsScreenShare: canShare,
   };
 

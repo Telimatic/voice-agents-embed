@@ -55,7 +55,7 @@ function renderWired(
   return renderHook(
     () => {
       const notifyStopped = useScreenshareStopNotifier();
-      return useScreenshareSession({ enabled: true, onStopped: notifyStopped, ...options });
+      return useScreenshareSession({ onStopped: notifyStopped, ...options });
     },
     { wrapper }
   );
@@ -122,6 +122,7 @@ function stopNotifications(fake: ReturnType<typeof createFakeRoom>): NotifyPaylo
 
 function withAgent(agent: FakeParticipant = fakeAgent()) {
   const fake = createFakeRoom();
+  fake.grantScreenShare();
   fake.remoteParticipants.set(agent.identity, agent);
   return { fake, agent };
 }
@@ -412,6 +413,7 @@ describe('the notification never degrades the call', () => {
     // No agent in the room at all: the caller could not have been asked, but the browser
     // bar can still fire against a share started some other way.
     const fake = createFakeRoom();
+    fake.grantScreenShare();
     const hook = renderWired(fake.room);
     await shareUntilGranted(fake.rpcHandlers, hook);
 

@@ -9,6 +9,7 @@ import {
   Track,
 } from 'livekit-client';
 import { useRoomContext } from '@livekit/components-react';
+import { usePublishPermissions } from '@/hooks/use-publish-permissions';
 import {
   type AgentParticipantLike,
   isAgentParticipant,
@@ -73,14 +74,6 @@ export interface ConsentRequest {
 
 export interface UseScreenshareSessionOptions {
   /**
-   * From the token route (`capabilities.screenshare`), which resolved org policy and
-   * minted the grant to match. Defaults to false: the widget offers nothing until it has
-   * been told the organization has the feature.
-   */
-  enabled?: boolean;
-  /** From the token route (`capabilities.allowedSurfaces`), which resolved org policy. */
-  allowedSurfaces?: ShareSurface[];
-  /**
    * Called once per share that ends, with why it ended. The browser's own "Stop sharing"
    * bar is invisible outside this hook, and `isSharing` alone cannot tell a caller stop
    * from a browser stop from an agent stop -- which is exactly what `StopReason` exists
@@ -94,8 +87,9 @@ export interface ScreenshareSession {
   /** True only while an agent that can receive a share is in the room (A2). */
   agentReady: boolean;
   /**
-   * Whether the share control may be offered at all: the token granted the capability,
-   * this browser can capture a display, and there is an agent listening for the share.
+   * Whether the share control may be offered at all: the local participant may publish a
+   * screen (the worker widened the permission at runtime), this browser can capture a
+   * display, and there is an agent listening for the share.
    */
   canShare: boolean;
   consentRequest: ConsentRequest | null;
@@ -192,14 +186,18 @@ export function useScreenshareSession(
   const room = useRoomContext();
   // Evaluated once per session: the browser cannot grow the ability mid-call.
   const capable = useMemo(() => canCaptureDisplay(), []);
-  const { agentReady } = useScreenshareAgent();
+  const { agentReady, allowedSurfaces } = useScreenshareAgent();
+  // Whether THIS participant may publish a screen right now. The token never grants it;
+  // the worker widens the permission after the resolver approves the session, and the
+  // SDK reports that as ParticipantPermissionsChanged, which this hook re-renders on.
+  const { screenShare: enabled } = usePublishPermissions();
 
   const [isSharing, setIsSharing] = useState(false);
   const [consentRequest, setConsentRequest] = useState<ConsentRequest | null>(null);
 
   const pendingRef = useRef<PendingConsent | null>(null);
-  const enabledRef = useRef<boolean>(options.enabled ?? false);
-  const allowedSurfacesRef = useRef<ShareSurface[] | undefined>(options.allowedSurfaces);
+  const enabledRef = useRef<boolean>(enabled);
+  const allowedSurfacesRef = useRef<ShareSurface[]>(allowedSurfaces);
   const promptSurfacesRef = useRef<ShareSurface[]>(DEFAULT_ALLOWED_SURFACES);
   const onStoppedRef = useRef<UseScreenshareSessionOptions['onStopped']>(options.onStopped);
   /** Set while this hook is the one taking the track down, so the reason is not guessed. */
@@ -212,12 +210,12 @@ export function useScreenshareSession(
   const agentLeftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    enabledRef.current = options.enabled ?? false;
-  }, [options.enabled]);
+    enabledRef.current = enabled;
+  }, [enabled]);
 
   useEffect(() => {
-    allowedSurfacesRef.current = options.allowedSurfaces;
-  }, [options.allowedSurfaces]);
+    allowedSurfacesRef.current = allowedSurfaces;
+  }, [allowedSurfaces]);
 
   useEffect(() => {
     onStoppedRef.current = options.onStopped;
@@ -314,7 +312,7 @@ export function useScreenshareSession(
         reason: 'no_display_capture',
       };
     }
-    const response = await accept(allowedSurfacesRef.current ?? DEFAULT_ALLOWED_SURFACES);
+    const response = await accept(allowedSurfacesRef.current);
     setIsSharing(response.result === 'granted');
     return response;
   }, [accept, capable]);
@@ -400,9 +398,9 @@ export function useScreenshareSession(
         });
       }
 
-      // The token is the enforcement point, but a caller whose organization does not have
-      // the feature must never see the prompt -- let alone the browser's own picker --
-      // only for the publish to be refused afterwards.
+      // The permission is the enforcement point, but a caller whose session has not been
+      // widened must never see the prompt -- let alone the browser's own picker -- only
+      // for the publish to be refused afterwards.
       if (!enabledRef.current) {
         return respond({
           v: SCREENSHARE_PROTOCOL_VERSION,
@@ -662,7 +660,7 @@ export function useScreenshareSession(
     // All three conditions, and the agent one is not decoration: without it a caller can
     // start a share nobody is listening for, producing a screen track against no consent
     // record at all.
-    canShare: (options.enabled ?? false) && capable && agentReady,
+    canShare: enabled && capable && agentReady,
     consentRequest,
     acceptConsent,
     declineConsent,

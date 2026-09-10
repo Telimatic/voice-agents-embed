@@ -1,4 +1,4 @@
-import { ParticipantKind, RoomEvent, Track } from 'livekit-client';
+import { ParticipantEvent, ParticipantKind, RoomEvent, Track } from 'livekit-client';
 import { vi } from 'vitest';
 import { ATTR_ENABLED, SCREENSHARE_PROTOCOL_VERSION } from '@/lib/screenshare-protocol';
 
@@ -76,6 +76,21 @@ export function createFakeRoom() {
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const remoteParticipants = new Map<string, FakeParticipant>();
   let published: ReturnType<typeof fakePublication> | undefined;
+  const participantListeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  /** What the token granted. SCREEN_SHARE (3) is NOT in it: the worker adds it at runtime. */
+  let permissions = {
+    canSubscribe: true,
+    canPublish: true,
+    canPublishData: true,
+    canUpdateMetadata: false,
+    hidden: false,
+    recorder: false,
+    agent: false,
+    canPublishSources: [1, 2],
+  };
+  const localParticipantEmit = (event: string, ...args: unknown[]) => {
+    Array.from(participantListeners.get(event) ?? []).forEach((cb) => cb(...args));
+  };
 
   const setScreenShareEnabled = vi.fn(
     async (
@@ -109,6 +124,18 @@ export function createFakeRoom() {
       setAttributes,
       getTrackPublication,
       performRpc,
+      get permissions() {
+        return permissions;
+      },
+      on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+        if (!participantListeners.has(event)) participantListeners.set(event, new Set());
+        participantListeners.get(event)!.add(cb);
+        return room.localParticipant;
+      }),
+      off: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+        participantListeners.get(event)?.delete(cb);
+        return room.localParticipant;
+      }),
     },
     registerRpcMethod: vi.fn((method: string, handler: RpcHandler) => {
       rpcHandlers.set(method, handler);
@@ -172,6 +199,28 @@ export function createFakeRoom() {
     ) => {
       participant.attributes = attributes;
       room.emit(RoomEvent.ParticipantAttributesChanged, attributes, participant);
+    },
+    /**
+     * The worker's runtime widen, as the SDK reports it: `permissions` changes and
+     * `ParticipantPermissionsChanged` fires on the local participant with the previous set.
+     */
+    grantScreenShare: () => {
+      const previous = permissions;
+      permissions = { ...permissions, canPublishSources: [1, 2, 3] };
+      localParticipantEmit(
+        ParticipantEvent.ParticipantPermissionsChanged,
+        previous,
+        room.localParticipant
+      );
+    },
+    revokeScreenShare: () => {
+      const previous = permissions;
+      permissions = { ...permissions, canPublishSources: [1, 2] };
+      localParticipantEmit(
+        ParticipantEvent.ParticipantPermissionsChanged,
+        previous,
+        room.localParticipant
+      );
     },
   };
 }
