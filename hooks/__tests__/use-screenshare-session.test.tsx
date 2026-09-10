@@ -289,8 +289,8 @@ describe('useScreenshareSession', () => {
     const { room, rpcHandlers, setScreenShareEnabled, setAttributes } = createGrantedRoom();
     const { result } = renderSession(room);
 
-    // The capability now rides the token, so an incapable browser refuses at the RPC
-    // rather than by having advertised `capable: false` beforehand.
+    // Device capability isn't pre-advertised via an attribute, so an incapable browser
+    // refuses at the RPC rather than by having withheld `capable: false` beforehand.
     await waitFor(() => expect(rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
     expect(setAttributes).not.toHaveBeenCalled();
 
@@ -726,7 +726,7 @@ describe('useScreenshareSession', () => {
       const fake = createGrantedRoom();
       const hook = renderSession(fake.room);
 
-      // The token said yes and the browser can capture, but nobody is listening.
+      // The permission has been widened and the browser can capture, but nobody is listening.
       expect(hook.result.current.agentReady).toBe(false);
       expect(hook.result.current.canShare).toBe(false);
 
@@ -770,7 +770,7 @@ describe('useScreenshareSession', () => {
       expect(hook.result.current.canShare).toBe(false);
     });
 
-    it('stays shut for an organization the token did not grant, and for a device that cannot capture', async () => {
+    it('stays shut before the permission is widened, and for a device that cannot capture', async () => {
       const denied = createFakeRoom();
       const deniedHook = renderSession(denied.room);
       act(() => denied.addParticipant(fakeAgent()));
