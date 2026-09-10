@@ -7,7 +7,8 @@
   },
   "attributes": {
     "capable": "telzino.screenshare.capable",
-    "enabled": "telzino.screenshare.enabled"
+    "enabled": "telzino.screenshare.enabled",
+    "allowedSurfaces": "telzino.screenshare.allowed_surfaces"
   },
   "attributeValues": ["true", "false"],
   "enums": {
@@ -18,6 +19,7 @@
     "initiatedBy": ["agent", "caller"]
   },
   "examples": {
+    "allowedSurfacesAttributeValue": "browser,window",
     "requestConsentPayload": {
       "v": 1,
       "scope": ["browser", "window", "monitor"],

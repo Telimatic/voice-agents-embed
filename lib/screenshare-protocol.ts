@@ -18,6 +18,13 @@ export const RPC_NOTIFY = 'screenshare.notify';
 export const ATTR_CAPABLE = 'telzino.screenshare.capable';
 /** Set by the agent from the session resolver. */
 export const ATTR_ENABLED = 'telzino.screenshare.enabled';
+/**
+ * Set by the agent alongside `ATTR_ENABLED`: the surfaces org policy allows, comma-joined
+ * in protocol order (`browser,window`). Empty when the agent retracts `enabled`. The widget
+ * reads it with `parseAllowedSurfaces`, which falls back to every surface, so an agent that
+ * predates this key still works.
+ */
+export const ATTR_ALLOWED_SURFACES = 'telzino.screenshare.allowed_surfaces';
 
 export type ShareSurface = 'browser' | 'window' | 'monitor';
 
@@ -29,13 +36,25 @@ export type ShareSurface = 'browser' | 'window' | 'monitor';
  * just membership: `preferredSurface` walks this list to pick the least invasive surface
  * the caller's policy allows.
  *
- * Mirrored in fixtures/screenshare-protocol.fixture.json's `enums.shareSurface` (asserted
- * in screenshare-protocol.test.ts) and, necessarily, in the dashboard's own
- * app/api/embed/widget-config/route.ts and the worker's screenshare_protocol.py — neither
- * of those can import this module, so they stay separate definitions checked for parity by
- * the same fixture, the way the rest of this protocol already works across repos.
+ * Mirrored in fixtures/screenshare-protocol.fixture.json's enums.shareSurface (asserted in screenshare-protocol.test.ts) and in the worker's screenshare_protocol.py, checked for parity by the same fixture.
  */
 export const SHARE_SURFACES: readonly ShareSurface[] = ['browser', 'window', 'monitor'];
+
+/**
+ * Parse the `ATTR_ALLOWED_SURFACES` value. Unknown entries are dropped, duplicates
+ * collapse, and the result is in protocol order regardless of the wire order. Nothing
+ * usable means the full list: this attribute is a hint to the picker, never enforcement.
+ */
+export function parseAllowedSurfaces(raw: string | undefined): ShareSurface[] {
+  const wanted = new Set(
+    (raw ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry): entry is ShareSurface => (SHARE_SURFACES as string[]).includes(entry))
+  );
+  const ordered = SHARE_SURFACES.filter((surface) => wanted.has(surface));
+  return ordered.length ? ordered : [...SHARE_SURFACES];
+}
 
 /**
  * Why a consent request ended. `granted` is only ever sent AFTER the track is published,

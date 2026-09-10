@@ -3,6 +3,7 @@ import fixture from '../../fixtures/screenshare-protocol.fixture.json';
 import {
   ATTR_CAPABLE,
   ATTR_ENABLED,
+  ATTR_ALLOWED_SURFACES,
   type ConsentResult,
   RPC_NOTIFY,
   RPC_REQUEST_CONSENT,
@@ -11,6 +12,7 @@ import {
   SHARE_SURFACES,
   type StopReason,
   isCurrentVersion,
+  parseAllowedSurfaces,
 } from '../screenshare-protocol';
 
 // Every ConsentResult and StopReason value the TS union declares. Kept as a literal
@@ -114,6 +116,30 @@ describe('screenshare protocol constants match the shared fixture', () => {
     const response = fixture.examples.notifyResponse;
     expect(isCurrentVersion(response)).toBe(true);
     expect(response.ok).toBe(true);
+  });
+
+  it('the allowed-surfaces attribute key matches the fixture', () => {
+    expect(ATTR_ALLOWED_SURFACES).toBe(fixture.attributes.allowedSurfaces);
+  });
+
+  describe('parseAllowedSurfaces', () => {
+    it('parses the fixture example in protocol order', () => {
+      expect(parseAllowedSurfaces(fixture.examples.allowedSurfacesAttributeValue)).toEqual([
+        'browser',
+        'window',
+      ]);
+    });
+    it('re-orders and de-duplicates to protocol order', () => {
+      expect(parseAllowedSurfaces('monitor,browser,monitor')).toEqual(['browser', 'monitor']);
+    });
+    it('drops unknown values', () => {
+      expect(parseAllowedSurfaces('window,tab')).toEqual(['window']);
+    });
+    it('falls back to every surface when absent, empty, or nothing usable', () => {
+      expect(parseAllowedSurfaces(undefined)).toEqual(['browser', 'window', 'monitor']);
+      expect(parseAllowedSurfaces('')).toEqual(['browser', 'window', 'monitor']);
+      expect(parseAllowedSurfaces('tab')).toEqual(['browser', 'window', 'monitor']);
+    });
   });
 });
 
