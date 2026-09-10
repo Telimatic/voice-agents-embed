@@ -76,8 +76,8 @@ describe('screenshare protocol constants match the shared fixture', () => {
     // The comment on SHARE_SURFACES claims it is "asserted in screenshare-protocol.test.ts",
     // and until this test it was not. Before the single-definition refactor the list was
     // READ from fixture.enums.shareSurface, so parity held by construction; it is now a
-    // hand-typed literal, and the dashboard's widget-config route and the worker's
-    // screenshare_protocol.py keep their own copies against the same fixture.
+    // hand-typed literal, and the worker's screenshare_protocol.py keeps its own copy
+    // against the same fixture.
     //
     // toEqual, not toContain in both directions like the enums above: order is load-bearing
     // here. preferredSurface walks this list to pick the LEAST invasive surface the
