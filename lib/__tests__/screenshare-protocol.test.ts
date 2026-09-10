@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import fixture from '../../fixtures/screenshare-protocol.fixture.json';
 import {
+  ATTR_ALLOWED_SURFACES,
   ATTR_CAPABLE,
   ATTR_ENABLED,
-  ATTR_ALLOWED_SURFACES,
   type ConsentResult,
   RPC_NOTIFY,
   RPC_REQUEST_CONSENT,
