@@ -59,4 +59,16 @@ describe('useScreenshareAgent allowedSurfaces', () => {
     );
     expect(result.current.allowedSurfaces).toEqual(['browser', 'window', 'monitor']);
   });
+
+  it('ignores surfaces advertised by an agent that is not ready', () => {
+    const fake = createFakeRoom();
+    const { result } = renderAgent(fake.room);
+    act(() =>
+      fake.addParticipant(
+        fakeAgent('agent-1', { [ATTR_ENABLED]: 'false', [ATTR_ALLOWED_SURFACES]: 'window' })
+      )
+    );
+    expect(result.current.agentReady).toBe(false);
+    expect(result.current.allowedSurfaces).toEqual(['browser', 'window', 'monitor']);
+  });
 });
