@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { AccessToken, type AccessTokenOptions, type VideoGrant } from 'livekit-server-sdk';
 import { RoomConfiguration, TrackSource } from '@livekit/protocol';
-import { type WidgetScreenshareConfig, fetchScreenshareConfig } from '@/lib/embed-config-client';
-import { ATTR_CAPABLE, type ShareSurface } from '@/lib/screenshare-protocol';
+import { ATTR_CAPABLE } from '@/lib/screenshare-protocol';
 
 // NOTE: you are expected to define the following environment variables in `.env.local`:
 const API_KEY = process.env.LIVEKIT_API_KEY;
@@ -17,12 +16,6 @@ export type ConnectionDetails = {
   roomName: string;
   participantName: string;
   participantToken: string;
-  // TLZ-561. The token is the authority on whether this session may publish a screen
-  // track; the widget reads this to decide whether to offer the control at all.
-  capabilities: {
-    screenshare: boolean;
-    allowedSurfaces?: ShareSurface[];
-  };
 };
 
 export async function POST(req: Request) {
@@ -57,18 +50,9 @@ export async function POST(req: Request) {
       ? `agent-${agentId}-${timestamp}`
       : `voice_assistant_room_${timestamp}`;
 
-    // TLZ-561. Resolved before minting so the grant itself, not just the UI, is the
-    // enforcement point (spec D-5): a tampered client cannot request a screen track the
-    // token never authorized. Every failure path here already resolves to "disabled" —
-    // see lib/embed-config-client.ts — so a screenshare outage never blocks the call.
-    const screenshare: WidgetScreenshareConfig = agentId
-      ? await fetchScreenshareConfig(agentId)
-      : { enabled: false, reason: 'no_agent_id' };
-
     const participantToken = await createParticipantToken(
       { identity: participantIdentity, name: participantName },
       roomName,
-      screenshare,
       capable,
       agentName
     );
@@ -79,10 +63,6 @@ export async function POST(req: Request) {
       roomName,
       participantToken: participantToken,
       participantName,
-      capabilities: {
-        screenshare: screenshare.enabled,
-        allowedSurfaces: screenshare.allowedSurfaces,
-      },
     };
 
     const headers = new Headers({
@@ -114,7 +94,6 @@ export async function OPTIONS() {
 function createParticipantToken(
   userInfo: AccessTokenOptions,
   roomName: string,
-  screenshare: WidgetScreenshareConfig,
   capable: boolean,
   agentName?: string
 ): Promise<string> {
@@ -146,18 +125,16 @@ function createParticipantToken(
     canPublish: true,
     canPublishData: true,
     canSubscribe: true,
-    // Enforcement at mint (spec D-5). usePublishPermissions already hides the share
-    // control when SCREEN_SHARE is absent, so this is both the server-side guarantee and
-    // the client-side gate, with no extra UI logic.
+    // TLZ-561. The grant is FIXED at mint: no organization policy is consulted here, and
+    // SCREEN_SHARE is never in a token. The worker, which is the one party that resolves
+    // policy for a session, widens the participant's permission at runtime once the
+    // resolver has approved it (UpdateParticipant). Until then the server refuses a
+    // screen track whatever a tampered client asks for.
     //
-    // CAMERA is included in both branches: this feature gates screenshare only. The base
-    // grant before TLZ-561 carried no canPublishSources at all, which LiveKit treats as
-    // "every source permitted" — omitting CAMERA here would silently take away camera
-    // publishing (gated by the unrelated supportsVideoInput/remote config) any time this
-    // code runs, which is not this task's job.
-    canPublishSources: screenshare.enabled
-      ? [TrackSource.CAMERA, TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE]
-      : [TrackSource.CAMERA, TrackSource.MICROPHONE],
+    // CAMERA stays: the base grant before TLZ-561 carried no canPublishSources at all,
+    // which LiveKit treats as "every source permitted", and camera publishing is gated
+    // by the unrelated supportsVideoInput / remote config, not by this feature.
+    canPublishSources: [TrackSource.CAMERA, TrackSource.MICROPHONE],
   };
   at.addGrant(grant);
 
