@@ -4,11 +4,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ParticipantKind, RoomEvent } from 'livekit-client';
 import { useRoomContext } from '@livekit/components-react';
 import {
+  ATTR_ALLOWED_SURFACES,
   ATTR_ENABLED,
   type NotifyPayload,
   RPC_NOTIFY,
   SCREENSHARE_PROTOCOL_VERSION,
+  type ShareSurface,
   type StopReason,
+  parseAllowedSurfaces,
 } from '@/lib/screenshare-protocol';
 
 /**
@@ -63,6 +66,12 @@ export interface ScreenshareAgentState {
    * departure ended -- and by then it is no longer in `remoteParticipants`.
    */
   agentIdentity: string | null;
+  /**
+   * The surfaces the ready agent's organization allows, from
+   * `telzino.screenshare.allowed_surfaces`. Every surface when no ready agent has said
+   * otherwise: this is a hint to the picker, never enforcement.
+   */
+  allowedSurfaces: ShareSurface[];
 }
 
 /**
@@ -77,6 +86,7 @@ export function useScreenshareAgent(): ScreenshareAgentState {
   const [state, setState] = useState<ScreenshareAgentState>({
     agentReady: false,
     agentIdentity: null,
+    allowedSurfaces: parseAllowedSurfaces(undefined),
   });
 
   useEffect(() => {
@@ -93,14 +103,21 @@ export function useScreenshareAgent(): ScreenshareAgentState {
       const present =
         ready ??
         participants.find((participant) => isAgentParticipant(participant as AgentParticipantLike));
+      const allowedSurfaces = parseAllowedSurfaces(
+        (ready as AgentParticipantLike | undefined)?.attributes?.[ATTR_ALLOWED_SURFACES]
+      );
       setState((previous) => {
         const agentReady = Boolean(ready);
         // A departed agent leaves its identity behind on purpose; see `agentIdentity`.
         const agentIdentity = present?.identity ?? previous.agentIdentity;
-        if (previous.agentReady === agentReady && previous.agentIdentity === agentIdentity) {
+        if (
+          previous.agentReady === agentReady &&
+          previous.agentIdentity === agentIdentity &&
+          previous.allowedSurfaces.join(',') === allowedSurfaces.join(',')
+        ) {
           return previous;
         }
-        return { agentReady, agentIdentity };
+        return { agentReady, agentIdentity, allowedSurfaces };
       });
     };
 
