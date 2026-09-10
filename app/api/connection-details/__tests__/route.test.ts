@@ -57,6 +57,14 @@ function decodeGrant(token: string): DecodedVideoGrant {
   return payload.video;
 }
 
+/** Participant attributes stamped into the token itself, rather than written by the
+ *  participant after joining — see createParticipantToken for why that distinction is
+ *  the whole point. */
+function decodeAttributes(token: string): Record<string, string> {
+  const payload = decodeJwt(token) as { attributes?: Record<string, string> };
+  return payload.attributes ?? {};
+}
+
 function postRequest(body: Record<string, unknown>): Request {
   return new Request('http://localhost/api/connection-details', {
     method: 'POST',
@@ -88,8 +96,13 @@ beforeAll(async () => {
   ({ POST } = await import('../route'));
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.unstubAllGlobals();
+  // The config client memoises per agent id for 30s (lib/embed-config-client.ts). Every
+  // case here reuses 'agent-1', so without this each test would answer from the previous
+  // test's fixture instead of its own.
+  const { __clearScreenshareConfigMemo } = await import('@/lib/embed-config-client');
+  __clearScreenshareConfigMemo();
 });
 
 afterEach(() => {
@@ -131,7 +144,7 @@ describe('POST /api/connection-details — screenshare capability', () => {
       trackSourceToString(TrackSource.MICROPHONE),
       trackSourceToString(TrackSource.SCREEN_SHARE),
     ]);
-    expect(grant.canUpdateOwnMetadata).toBe(true);
+    expect(grant.canUpdateOwnMetadata).toBeFalsy(); // must never be granted — see decodeAttributes tests
   });
 
   it('disabled: grant carries camera + microphone (no screen_share), capabilities.screenshare is false', async () => {
@@ -159,7 +172,7 @@ describe('POST /api/connection-details — screenshare capability', () => {
       trackSourceToString(TrackSource.MICROPHONE),
     ]);
     expect(grant.canPublishSources).not.toContain(trackSourceToString(TrackSource.SCREEN_SHARE));
-    expect(grant.canUpdateOwnMetadata).toBe(true);
+    expect(grant.canUpdateOwnMetadata).toBeFalsy(); // must never be granted — see decodeAttributes tests
   });
 
   /**
@@ -261,7 +274,7 @@ describe('POST /api/connection-details — screenshare capability', () => {
       trackSourceToString(TrackSource.CAMERA),
       trackSourceToString(TrackSource.MICROPHONE),
     ]);
-    expect(grant.canUpdateOwnMetadata).toBe(true);
+    expect(grant.canUpdateOwnMetadata).toBeFalsy(); // must never be granted — see decodeAttributes tests
 
     expect(warnSpy).toHaveBeenCalled();
   });
@@ -301,7 +314,7 @@ describe('POST /api/connection-details — screenshare capability', () => {
       trackSourceToString(TrackSource.CAMERA),
       trackSourceToString(TrackSource.MICROPHONE),
     ]);
-    expect(grant.canUpdateOwnMetadata).toBe(true);
+    expect(grant.canUpdateOwnMetadata).toBeFalsy(); // must never be granted — see decodeAttributes tests
   });
 
   it('missing agentId: audio-only, dashboard never called', async () => {
@@ -320,7 +333,7 @@ describe('POST /api/connection-details — screenshare capability', () => {
       trackSourceToString(TrackSource.CAMERA),
       trackSourceToString(TrackSource.MICROPHONE),
     ]);
-    expect(grant.canUpdateOwnMetadata).toBe(true);
+    expect(grant.canUpdateOwnMetadata).toBeFalsy(); // must never be granted — see decodeAttributes tests
 
     // No agentId to ask about means there is nothing to fetch: fail closed locally
     // rather than making a request that could never succeed.
@@ -342,7 +355,7 @@ describe('POST /api/connection-details — screenshare capability', () => {
       trackSourceToString(TrackSource.CAMERA),
       trackSourceToString(TrackSource.MICROPHONE),
     ]);
-    expect(grant.canUpdateOwnMetadata).toBe(true);
+    expect(grant.canUpdateOwnMetadata).toBeFalsy(); // must never be granted — see decodeAttributes tests
   });
 
   it('not_configured: DASHBOARD_EMBED_CONFIG_URL / EMBED_CONFIG_KEY_CURRENT unset (the state of every environment today), audio-only, dashboard never called', async () => {
@@ -366,7 +379,7 @@ describe('POST /api/connection-details — screenshare capability', () => {
         trackSourceToString(TrackSource.CAMERA),
         trackSourceToString(TrackSource.MICROPHONE),
       ]);
-      expect(grant.canUpdateOwnMetadata).toBe(true);
+      expect(grant.canUpdateOwnMetadata).toBeFalsy(); // must never be granted — see decodeAttributes tests
 
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
@@ -419,5 +432,98 @@ describe('POST /api/connection-details — screenshare capability', () => {
       ENV.EMBED_CONFIG_KEY_CURRENT
     );
     expect(tamperedSignature).not.toBe(signatureHeader);
+  });
+
+  describe('capability attribute (A4) — minted, never client-written', () => {
+    it('stamps telzino.screenshare.capable from the request body', async () => {
+      const { POST } = await import('../route');
+      const res = await POST(postRequest({ agentId: 'agent-1', capable: true }));
+      assertResponse(res);
+      const { participantToken } = (await res.json()) as { participantToken: string };
+
+      expect(decodeAttributes(participantToken)).toEqual({ 'telzino.screenshare.capable': 'true' });
+      expect(decodeGrant(participantToken).canUpdateOwnMetadata).toBeFalsy();
+    });
+
+    it("stamps 'false' when the browser reports it cannot capture", async () => {
+      const { POST } = await import('../route');
+      const res = await POST(postRequest({ agentId: 'agent-1', capable: false }));
+      assertResponse(res);
+      const { participantToken } = (await res.json()) as { participantToken: string };
+
+      expect(decodeAttributes(participantToken)['telzino.screenshare.capable']).toBe('false');
+    });
+
+    it("stamps 'false' when the field is absent or not a boolean true", async () => {
+      // Fail closed on junk: the agent must not be told a browser can capture because a
+      // caller sent `capable: 'yes'`.
+      const { POST } = await import('../route');
+      for (const body of [{ agentId: 'agent-1' }, { agentId: 'agent-1', capable: 'yes' }]) {
+        const res = await POST(postRequest(body));
+        assertResponse(res);
+        const { participantToken } = (await res.json()) as { participantToken: string };
+        expect(decodeAttributes(participantToken)['telzino.screenshare.capable']).toBe('false');
+      }
+    });
+  });
+
+  describe('config memo (review I-2)', () => {
+    it('asks the dashboard once per agent, not once per session start', async () => {
+      // Every widget open on every customer site waits on this hop before the room
+      // connects; the dashboard's own memo is per dashboard instance, not per embed host.
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse({
+          organization_id: 'org-1',
+          screenshare: { enabled: true, reason: 'ok', config: { allowed_surfaces: ['browser'] } },
+        })
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      for (let i = 0; i < 3; i++) {
+        const res = await POST(postRequest({ agentId: 'agent-memo-1' }));
+        assertResponse(res);
+        const data = await res.json();
+        expect(data.capabilities.screenshare).toBe(true);
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('memoises per agent, so one agent cannot answer for another', async () => {
+      const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+        const { agentId } = JSON.parse(init.body as string);
+        return Promise.resolve(
+          jsonResponse({
+            organization_id: 'org-1',
+            screenshare:
+              agentId === 'agent-on'
+                ? { enabled: true, reason: 'ok', config: { allowed_surfaces: ['browser'] } }
+                : { enabled: false, reason: 'agent_disabled' },
+          })
+        );
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const onRes = await POST(postRequest({ agentId: 'agent-on' }));
+      assertResponse(onRes);
+      expect((await onRes.json()).capabilities.screenshare).toBe(true);
+
+      const offRes = await POST(postRequest({ agentId: 'agent-off' }));
+      assertResponse(offRes);
+      expect((await offRes.json()).capabilities.screenshare).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('memoises a failure too, so a dashboard outage is not re-dialled on every call', async () => {
+      // The only stale direction is WITHHOLDING the feature, which is the safe one.
+      const fetchMock = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+      vi.stubGlobal('fetch', fetchMock);
+
+      for (let i = 0; i < 3; i++) {
+        const res = await POST(postRequest({ agentId: 'agent-down' }));
+        assertResponse(res);
+        expect((await res.json()).capabilities.screenshare).toBe(false);
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

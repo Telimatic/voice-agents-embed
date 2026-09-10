@@ -14,15 +14,15 @@ import {
   isAgentParticipant,
   useScreenshareAgent,
 } from '@/hooks/use-screenshare-peer';
-import { canCaptureDisplay } from '@/lib/screenshare-capability';
+import { canCaptureDisplay, isSafari } from '@/lib/screenshare-capability';
 import {
-  ATTR_CAPABLE,
   type ConsentResult,
   RPC_REQUEST_CONSENT,
   RPC_STOP,
   type RequestConsentPayload,
   type RequestConsentResponse,
   SCREENSHARE_PROTOCOL_VERSION,
+  SHARE_SURFACES,
   type ShareSurface,
   type StopReason,
   type StopResponse,
@@ -41,10 +41,7 @@ import {
  *    track the agent believes was cancelled is the same defect wearing the other face.
  */
 
-/** Preference order, least invasive first. Also the canonical surface list. */
-const SURFACE_PREFERENCE: ShareSurface[] = ['browser', 'window', 'monitor'];
-
-export const DEFAULT_ALLOWED_SURFACES: ShareSurface[] = SURFACE_PREFERENCE;
+export const DEFAULT_ALLOWED_SURFACES: ShareSurface[] = [...SHARE_SURFACES];
 
 /** Used when the agent's request does not carry its own `timeout_seconds`. */
 export const DEFAULT_CONSENT_TIMEOUT_SECONDS = 30;
@@ -116,7 +113,7 @@ export interface ScreenshareSession {
  */
 export function preferredSurface(allowedSurfaces?: ShareSurface[]): ShareSurface {
   const allowList = allowedSurfaces?.length ? allowedSurfaces : DEFAULT_ALLOWED_SURFACES;
-  return SURFACE_PREFERENCE.find((surface) => allowList.includes(surface)) ?? 'browser';
+  return SHARE_SURFACES.find((surface) => allowList.includes(surface)) ?? 'browser';
 }
 
 /**
@@ -128,7 +125,7 @@ export function surfaceOf(publication: LocalTrackPublication): ShareSurface | un
     | (MediaTrackSettings & { displaySurface?: string })
     | undefined;
   const surface = settings?.displaySurface as ShareSurface | undefined;
-  return surface && SURFACE_PREFERENCE.includes(surface) ? surface : undefined;
+  return surface && SHARE_SURFACES.includes(surface) ? surface : undefined;
 }
 
 /** The agent's requested scope, narrowed by what org policy allows. */
@@ -252,7 +249,13 @@ export function useScreenshareSession(
           surfaceSwitching: 'include',
           // Screen content is mostly static, so a low frame rate costs the agent nothing
           // and leaves far more headroom for the audio the call actually depends on.
-          resolution: { width: 1920, height: 1080, frameRate: 3 },
+          //
+          // Omitted entirely on Safari: livekit-client documents that on Safari 17,
+          // "specifying any resolution at all would lead to a low-resolution capture"
+          // (WebKit bug 263015), and its own default is already uncapped there. A
+          // low-resolution capture makes on-screen text unreadable, which is the whole
+          // point of the feature — worth more than the frame-rate hint.
+          ...(isSafari() ? {} : { resolution: { width: 1920, height: 1080, frameRate: 3 } }),
         });
         if (!pub)
           return { v: SCREENSHARE_PROTOCOL_VERSION, result: 'failed', reason: 'no_publication' };
@@ -499,33 +502,13 @@ export function useScreenshareSession(
     [settle, stopShare]
   );
 
-  // A4: advertise the capability as soon as there is a session to advertise it on, so the
-  // agent knows before it offers rather than after the caller agrees. This says what the
-  // BROWSER can do; whether the organization may is the token's business, not this flag's.
-  useEffect(() => {
-    if (!room) {
-      return;
-    }
-    const publishCapability = () => {
-      try {
-        void Promise.resolve(
-          room.localParticipant.setAttributes({ [ATTR_CAPABLE]: String(capable) })
-        ).catch((err) => {
-          console.warn('[screenshare] could not publish the capability attribute', err);
-        });
-      } catch (err) {
-        console.warn('[screenshare] could not publish the capability attribute', err);
-      }
-    };
-
-    if (room.state === 'connected') {
-      publishCapability();
-    }
-    room.on(RoomEvent.Connected, publishCapability);
-    return () => {
-      room.off(RoomEvent.Connected, publishCapability);
-    };
-  }, [room, capable]);
+  // A4: the capability attribute (ATTR_CAPABLE) used to be published from here via
+  // room.localParticipant.setAttributes() on RoomEvent.Connected. It is now stamped into
+  // the access token instead (app/api/connection-details/route.ts), because doing it from
+  // the client required granting `canUpdateOwnMetadata` to an anonymous participant on a
+  // public CORS-`*` token route — and LiveKit's server filters no attribute keys, so that
+  // permission also let a tampered page write the `caller` / `sip.*` keys the worker reads
+  // as caller identity. The worker sees the identical attribute either way.
 
   useEffect(() => {
     if (!room) {

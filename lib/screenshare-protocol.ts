@@ -22,6 +22,22 @@ export const ATTR_ENABLED = 'telzino.screenshare.enabled';
 export type ShareSurface = 'browser' | 'window' | 'monitor';
 
 /**
+ * The canonical list, in preference order (least invasive first). The single definition
+ * for this repo — it used to be declared three times (here implicitly via the type, plus
+ * two runtime copies: `KNOWN_SURFACES` in embed-config-client.ts and `SURFACE_PREFERENCE`
+ * in use-screenshare-session.ts), all required to agree by hand. Order matters here, not
+ * just membership: `preferredSurface` walks this list to pick the least invasive surface
+ * the caller's policy allows.
+ *
+ * Mirrored in fixtures/screenshare-protocol.fixture.json's `enums.shareSurface` (asserted
+ * in screenshare-protocol.test.ts) and, necessarily, in the dashboard's own
+ * app/api/embed/widget-config/route.ts and the worker's screenshare_protocol.py — neither
+ * of those can import this module, so they stay separate definitions checked for parity by
+ * the same fixture, the way the rest of this protocol already works across repos.
+ */
+export const SHARE_SURFACES: readonly ShareSurface[] = ['browser', 'window', 'monitor'];
+
+/**
  * Why a consent request ended. `granted` is only ever sent AFTER the track is published,
  * so the agent never waits on a share the caller silently cancelled in the picker.
  */

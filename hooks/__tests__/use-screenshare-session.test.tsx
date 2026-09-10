@@ -13,7 +13,6 @@ import {
   useScreenshareSession,
 } from '@/hooks/use-screenshare-session';
 import {
-  ATTR_CAPABLE,
   ATTR_ENABLED,
   RPC_REQUEST_CONSENT,
   RPC_STOP,
@@ -119,13 +118,26 @@ afterEach(() => {
 describe('useScreenshareSession', () => {
   beforeEach(() => stubNavigator({ capable: true }));
 
-  it('advertises the capability attribute and registers both RPC methods on connect', async () => {
+  it('registers both RPC methods on connect', async () => {
+    const { room, rpcHandlers } = createFakeRoom();
+    renderSession(room);
+
+    await waitFor(() => expect(rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
+    expect(rpcHandlers.has(RPC_STOP)).toBe(true);
+  });
+
+  it('never writes a participant attribute, because the token grants no permission to', async () => {
+    // ATTR_CAPABLE is stamped into the access token server-side
+    // (app/api/connection-details/route.ts). Publishing it from here required
+    // `canUpdateOwnMetadata` on a public CORS-`*` token route, and LiveKit filters no
+    // attribute keys — so that permission also let a tampered page write the `caller` /
+    // `sip.*` keys the worker reads as caller identity. If this assertion ever fails, the
+    // grant has to come back, and the spoofing path comes back with it.
     const { room, rpcHandlers, setAttributes } = createFakeRoom();
     renderSession(room);
 
-    await waitFor(() => expect(setAttributes).toHaveBeenCalledWith({ [ATTR_CAPABLE]: 'true' }));
-    expect(rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true);
-    expect(rpcHandlers.has(RPC_STOP)).toBe(true);
+    await waitFor(() => expect(rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
+    expect(setAttributes).not.toHaveBeenCalled();
   });
 
   it('answers granted with the surface actually chosen and the track sid, only after publish', async () => {
@@ -269,7 +281,10 @@ describe('useScreenshareSession', () => {
     const { room, rpcHandlers, setScreenShareEnabled, setAttributes } = createFakeRoom();
     const { result } = renderSession(room);
 
-    await waitFor(() => expect(setAttributes).toHaveBeenCalledWith({ [ATTR_CAPABLE]: 'false' }));
+    // The capability now rides the token, so an incapable browser refuses at the RPC
+    // rather than by having advertised `capable: false` beforehand.
+    await waitFor(() => expect(rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
+    expect(setAttributes).not.toHaveBeenCalled();
 
     const response = await parse(invokeConsent(rpcHandlers.get(RPC_REQUEST_CONSENT)!));
     expect(response.result).toBe('unsupported');

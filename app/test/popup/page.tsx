@@ -5,8 +5,9 @@ import Script from 'next/script';
 import { getSandboxId } from '@/lib/env';
 import './styles.css';
 
-// Used when the page is loaded without an `?agentId=` query param.
-const DEV_AGENT_ID = 'a745f083-ea18-4aeb-89a0-ac264e826a71';
+// Used when the page is loaded without an `?agentId=` query param. Local dev points at
+// the production database, so this is an env var rather than a committed real agent id.
+const DEV_AGENT_ID = process.env.NEXT_PUBLIC_TEST_POPUP_AGENT_ID ?? '';
 
 const CODE_SNIPPET = `
 function toggleTheme() {

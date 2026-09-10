@@ -1,8 +1,10 @@
 // TLZ-561. Whether this browser can capture a display at all.
 //
-// The widget publishes the answer as the `telzino.screenshare.capable` participant
-// attribute the moment it connects, so the agent knows BEFORE it offers rather than
-// after the caller has already agreed to something their browser cannot do.
+// The answer is reported to the token route and stamped into the access token as the
+// `telzino.screenshare.capable` participant attribute, so the agent knows BEFORE it offers
+// rather than after the caller has already agreed to something their browser cannot do.
+// (It used to be written by the participant itself via setAttributes; see
+// app/api/connection-details/route.ts for why that permission had to go.)
 
 /** iOS proper, where the device is named in the user agent. */
 const IOS_DEVICE = /iPad|iPhone|iPod/;
@@ -47,5 +49,58 @@ export function canCaptureDisplay(): boolean {
     return false;
   }
 
+  if (!displayCaptureAllowedByPolicy()) {
+    return false;
+  }
+
   return !isAppleMobile(navigator.userAgent ?? '', navigator.maxTouchPoints ?? 0);
+}
+
+/**
+ * False only when the document is affirmatively KNOWN to be forbidden from capturing a
+ * display by Permissions-Policy.
+ *
+ * `display-capture` defaults to an allowlist of `self`, so a customer who wraps the popup
+ * in their own cross-origin iframe — or sends a restrictive `Permissions-Policy` header —
+ * has the feature switched off for this document. `getDisplayMedia()` then rejects with
+ * `NotAllowedError`, which is the SAME error a caller dismissing the picker produces: the
+ * widget showed the consent prompt, opened nothing, and wrote `cancelled` to the audit row
+ * as though the caller had declined.
+ *
+ * `document.featurePolicy` is non-standard and Chromium-only, so this is deliberately a
+ * one-way test: an explicit `false` suppresses the offer, and everything else (including
+ * every browser without the API) leaves behaviour exactly as it was.
+ */
+function displayCaptureAllowedByPolicy(): boolean {
+  if (typeof document === 'undefined') {
+    return true;
+  }
+  const policy = (
+    document as Document & {
+      featurePolicy?: { allowsFeature?: (feature: string) => boolean };
+    }
+  ).featurePolicy;
+  return policy?.allowsFeature?.('display-capture') !== false;
+}
+
+/**
+ * Safari, any version.
+ *
+ * Used only to decide whether to pass a capture `resolution`. livekit-client documents
+ * (room/track/options.d.ts): "On Safari 17, default resolution is not capped, due to a
+ * bug, specifying any resolution at all would lead to a low-resolution capture"
+ * (WebKit bug 263015) — and its own default is already "1080 for all browsers OTHER than
+ * Safari", so omitting the constraint here matches what the SDK would do anyway. A
+ * low-resolution capture makes on-screen text unreadable, which is the entire feature.
+ *
+ * `isSafari17Based()` exists inside livekit-client but is not exported from the package
+ * root, so this is detected here rather than imported. Version is not parsed: the cost of
+ * omitting the constraint on an older Safari is the SDK's own default.
+ */
+export function isSafari(): boolean {
+  if (typeof navigator === 'undefined' || !navigator) {
+    return false;
+  }
+  const ua = navigator.userAgent ?? '';
+  return /Safari\//.test(ua) && !/\b(?:Chrome|Chromium|Android|Edg)\//.test(ua);
 }
