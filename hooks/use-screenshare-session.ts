@@ -80,6 +80,16 @@ export interface UseScreenshareSessionOptions {
    * to distinguish, and what a `screenshare.notify` needs in order to be true.
    */
   onStopped?: (reason: StopReason) => void;
+  /**
+   * Called exactly once per CALLER-initiated share attempt, with what the browser picker
+   * decided: `granted` (with the surface and track id), `cancelled`, or `failed`. It is
+   * what lets the agent record who really started the share -- without it the agent sees
+   * only a screen track nobody announced, and files it as pre-existing.
+   *
+   * NOT called for the pre-checks that never opened a picker (`not_permitted`,
+   * `no_display_capture`): nothing was asked of the caller, so no consent happened.
+   */
+  onCallerConsent?: (response: RequestConsentResponse) => void;
 }
 
 export interface ScreenshareSession {
@@ -200,6 +210,9 @@ export function useScreenshareSession(
   const allowedSurfacesRef = useRef<ShareSurface[]>(allowedSurfaces);
   const promptSurfacesRef = useRef<ShareSurface[]>(DEFAULT_ALLOWED_SURFACES);
   const onStoppedRef = useRef<UseScreenshareSessionOptions['onStopped']>(options.onStopped);
+  const onCallerConsentRef = useRef<UseScreenshareSessionOptions['onCallerConsent']>(
+    options.onCallerConsent
+  );
   /** Set while this hook is the one taking the track down, so the reason is not guessed. */
   const stopReasonRef = useRef<StopReason | null>(null);
   /** True while a browser picker is open, so a second accept cannot open a second one. */
@@ -220,6 +233,10 @@ export function useScreenshareSession(
   useEffect(() => {
     onStoppedRef.current = options.onStopped;
   }, [options.onStopped]);
+
+  useEffect(() => {
+    onCallerConsentRef.current = options.onCallerConsent;
+  }, [options.onCallerConsent]);
 
   /** Resolve the outstanding RPC exactly once and take the overlay down. */
   const settle = useCallback((response: RequestConsentResponse) => {
@@ -314,6 +331,9 @@ export function useScreenshareSession(
     }
     const response = await accept(allowedSurfacesRef.current);
     setIsSharing(response.result === 'granted');
+    // Announced only from here: the two returns above never opened a picker, so there
+    // is no consent outcome to report.
+    onCallerConsentRef.current?.(response);
     return response;
   }, [accept, capable]);
 

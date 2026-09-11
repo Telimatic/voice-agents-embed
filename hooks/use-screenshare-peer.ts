@@ -8,6 +8,7 @@ import {
   ATTR_ENABLED,
   type NotifyPayload,
   RPC_NOTIFY,
+  type RequestConsentResponse,
   SCREENSHARE_PROTOCOL_VERSION,
   type ShareSurface,
   type StopReason,
@@ -159,6 +160,52 @@ export function stopNotifyPayload(reason: StopReason): NotifyPayload {
   };
 }
 
+/** What to say when a notification cannot be sent, worded for the event being announced. */
+type NotifyMessages = {
+  /** No agent to send to at all. Logged with whatever detail identifies the notification. */
+  noAgent: () => void;
+  /** The agent was there but could not answer: logged with the error. */
+  failure: string;
+};
+
+/**
+ * The one place a `screenshare.notify` leaves the widget. Both notifiers share it so the
+ * wire behaviour -- destination, method, payload encoding and timeout -- cannot drift
+ * between the two events the agent hears about.
+ */
+function useNotifySender(): (payload: NotifyPayload, messages: NotifyMessages) => void {
+  const room = useRoomContext();
+  const { agentIdentity } = useScreenshareAgent();
+  const identityRef = useRef<string | null>(agentIdentity);
+
+  useEffect(() => {
+    identityRef.current = agentIdentity;
+  }, [agentIdentity]);
+
+  return useCallback(
+    (payload: NotifyPayload, messages: NotifyMessages) => {
+      const destinationIdentity = identityRef.current;
+      if (!room || !destinationIdentity) {
+        messages.noAgent();
+        return;
+      }
+      void (async () => {
+        try {
+          await room.localParticipant.performRpc({
+            destinationIdentity,
+            method: RPC_NOTIFY,
+            payload: JSON.stringify(payload),
+            responseTimeout: NOTIFY_RESPONSE_TIMEOUT_MS,
+          });
+        } catch (err) {
+          console.warn(messages.failure, err);
+        }
+      })();
+    },
+    [room]
+  );
+}
+
 /**
  * The `onStopped` handler for `useScreenshareSession`: one ended share, one
  * `screenshare.notify`.
@@ -169,36 +216,60 @@ export function stopNotifyPayload(reason: StopReason): NotifyPayload {
  * it but say so in the console.
  */
 export function useScreenshareStopNotifier(): (reason: StopReason) => void {
-  const room = useRoomContext();
-  const { agentIdentity } = useScreenshareAgent();
-  const identityRef = useRef<string | null>(agentIdentity);
-
-  useEffect(() => {
-    identityRef.current = agentIdentity;
-  }, [agentIdentity]);
+  const send = useNotifySender();
 
   return useCallback(
     (reason: StopReason) => {
-      const destinationIdentity = identityRef.current;
-      if (!room || !destinationIdentity) {
-        console.warn('[screenshare] no agent to notify that sharing stopped', reason);
-        return;
-      }
-      const payload = stopNotifyPayload(reason);
-      void (async () => {
-        try {
-          await room.localParticipant.performRpc({
-            destinationIdentity,
-            method: RPC_NOTIFY,
-            payload: JSON.stringify(payload),
-            responseTimeout: NOTIFY_RESPONSE_TIMEOUT_MS,
-          });
-        } catch (err) {
-          console.warn('[screenshare] could not tell the agent that sharing stopped', err);
-        }
-      })();
+      send(stopNotifyPayload(reason), {
+        noAgent: () =>
+          console.warn('[screenshare] no agent to notify that sharing stopped', reason),
+        failure: '[screenshare] could not tell the agent that sharing stopped',
+      });
     },
-    [room]
+    [send]
+  );
+}
+
+/**
+ * The `consent` notification for a share the CALLER started from the widget's own
+ * button. Pressing the button is the agreement; the browser picker then decides the
+ * outcome, and it is the OUTCOME that is announced -- after the track is published for
+ * `granted`, so the agent never waits on a share the caller dismissed in the picker.
+ * The agent records it as the share's audit row; without it the share is recorded as
+ * "pre_existing" with an unknown surface.
+ */
+export function callerConsentNotifyPayload(response: RequestConsentResponse): NotifyPayload {
+  return {
+    v: SCREENSHARE_PROTOCOL_VERSION,
+    event: 'consent',
+    initiated_by: 'caller',
+    result: response.result,
+    ...(response.surface ? { surface: response.surface } : {}),
+    ...(response.track_sid ? { track_sid: response.track_sid } : {}),
+    ...(response.reason ? { reason: response.reason } : {}),
+  };
+}
+
+/**
+ * The `onCallerConsent` handler for `useScreenshareSession`: one caller-initiated share
+ * outcome, one `screenshare.notify`. Same fire-and-forget rules as the stop notifier:
+ * nothing here may end or degrade the audio session.
+ */
+export function useScreenshareCallerConsentNotifier(): (response: RequestConsentResponse) => void {
+  const send = useNotifySender();
+
+  return useCallback(
+    (response: RequestConsentResponse) => {
+      send(callerConsentNotifyPayload(response), {
+        noAgent: () =>
+          console.warn(
+            '[screenshare] no agent to notify about the caller-started share',
+            response.result
+          ),
+        failure: '[screenshare] could not tell the agent about the caller-started share',
+      });
+    },
+    [send]
   );
 }
 

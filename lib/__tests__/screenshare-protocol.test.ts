@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { callerConsentNotifyPayload } from '@/hooks/use-screenshare-peer';
 import fixture from '../../fixtures/screenshare-protocol.fixture.json';
 import {
   ATTR_ALLOWED_SURFACES,
@@ -156,5 +157,54 @@ describe('isCurrentVersion', () => {
     expect(isCurrentVersion({ v: SCREENSHARE_PROTOCOL_VERSION + 1 })).toBe(false);
     expect(isCurrentVersion({ v: 0 })).toBe(false);
     expect(isCurrentVersion({ v: '1' })).toBe(false);
+  });
+});
+
+describe('callerConsentNotifyPayload', () => {
+  it('matches the fixture NotifyPayload shape for a granted picker', () => {
+    const payload = callerConsentNotifyPayload({
+      v: SCREENSHARE_PROTOCOL_VERSION,
+      result: 'granted',
+      surface: 'window',
+      track_sid: 'TR_screen_1',
+    });
+
+    expect(isCurrentVersion(payload)).toBe(true);
+    expect(fixture.enums.notifyEvent).toContain(payload.event);
+    expect(fixture.enums.initiatedBy).toContain(payload.initiated_by);
+    expect(payload).toEqual({
+      v: SCREENSHARE_PROTOCOL_VERSION,
+      event: 'consent',
+      initiated_by: 'caller',
+      result: 'granted',
+      surface: 'window',
+      track_sid: 'TR_screen_1',
+    });
+    // No key the worker's NotifyPayload does not know: the fixture example carries every
+    // optional field this payload can use, so its key set is the upper bound.
+    const allowed = new Set(Object.keys(fixture.examples.notifyPayload));
+    for (const key of Object.keys(payload)) {
+      expect(allowed).toContain(key);
+    }
+  });
+
+  it('omits the fields a dismissed or failed picker has no answer for', () => {
+    // `undefined` values would be serialised away by JSON.stringify anyway, but the
+    // worker validates key presence, so they are never written in the first place.
+    expect(
+      callerConsentNotifyPayload({ v: SCREENSHARE_PROTOCOL_VERSION, result: 'cancelled' })
+    ).toEqual({
+      v: SCREENSHARE_PROTOCOL_VERSION,
+      event: 'consent',
+      initiated_by: 'caller',
+      result: 'cancelled',
+    });
+    expect(
+      callerConsentNotifyPayload({
+        v: SCREENSHARE_PROTOCOL_VERSION,
+        result: 'failed',
+        reason: 'NotFoundError',
+      })
+    ).toMatchObject({ event: 'consent', result: 'failed', reason: 'NotFoundError' });
   });
 });

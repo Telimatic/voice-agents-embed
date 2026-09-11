@@ -17,7 +17,10 @@ import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
 import { Transcript } from '@/components/embed-popup/transcript';
 import useChatAndTranscription from '@/hooks/use-chat-and-transcription';
-import { useScreenshareStopNotifier } from '@/hooks/use-screenshare-peer';
+import {
+  useScreenshareCallerConsentNotifier,
+  useScreenshareStopNotifier,
+} from '@/hooks/use-screenshare-peer';
 import { useScreenshareSession } from '@/hooks/use-screenshare-session';
 import { useDebugMode } from '@/hooks/useDebug';
 import type { AppConfig, EmbedErrorDetails } from '@/lib/types';
@@ -81,11 +84,14 @@ export const PopupView = ({
   // exactly once, from its single unpublish listener, and this turns that report into the
   // notification. Sending it from anywhere else would race that listener.
   const notifyStopped = useScreenshareStopNotifier();
+  // TLZ-561. A share the caller started from the widget's own button is announced to the
+  // agent with the picker's outcome; without it the agent records it as pre-existing.
+  const notifyCallerConsent = useScreenshareCallerConsentNotifier();
   // TLZ-561. Owns the consent prompt and the screen track. Whether a share may be offered
   // is derived inside the hook from the live publish permission (widened by the worker at
   // runtime) and the agent's attributes, so nothing is threaded in from the token route.
   const { canShare, consentRequest, acceptConsent, declineConsent, startShare, stopShare } =
-    useScreenshareSession({ onStopped: notifyStopped });
+    useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
 
   const { supportsChatInput, supportsVideoInput } = appConfig;
   const capabilities = {

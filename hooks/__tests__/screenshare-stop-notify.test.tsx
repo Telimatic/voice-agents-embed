@@ -3,7 +3,10 @@ import { Room, RoomEvent } from 'livekit-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RoomContext } from '@livekit/components-react';
 import { act, renderHook } from '@testing-library/react';
-import { useScreenshareStopNotifier } from '@/hooks/use-screenshare-peer';
+import {
+  useScreenshareCallerConsentNotifier,
+  useScreenshareStopNotifier,
+} from '@/hooks/use-screenshare-peer';
 import {
   AGENT_LEFT_GRACE_MS,
   type UseScreenshareSessionOptions,
@@ -55,7 +58,12 @@ function renderWired(
   return renderHook(
     () => {
       const notifyStopped = useScreenshareStopNotifier();
-      return useScreenshareSession({ onStopped: notifyStopped, ...options });
+      const notifyCallerConsent = useScreenshareCallerConsentNotifier();
+      return useScreenshareSession({
+        onStopped: notifyStopped,
+        onCallerConsent: notifyCallerConsent,
+        ...options,
+      });
     },
     { wrapper }
   );
@@ -118,6 +126,10 @@ function lastRpc(fake: ReturnType<typeof createFakeRoom>): PerformRpcArgs {
 
 function stopNotifications(fake: ReturnType<typeof createFakeRoom>): NotifyPayload[] {
   return notifications(fake).filter((payload) => payload.event === 'stopped');
+}
+
+function consentNotifications(fake: ReturnType<typeof createFakeRoom>): NotifyPayload[] {
+  return notifications(fake).filter((payload) => payload.event === 'consent');
 }
 
 function withAgent(agent: FakeParticipant = fakeAgent()) {
@@ -428,5 +440,87 @@ describe('the notification never degrades the call', () => {
       'browser_stop'
     );
     expect(hook.result.current.isSharing).toBe(false);
+  });
+});
+
+describe('one consent notification per caller-started share', () => {
+  it('announces the outcome of a share the caller started, once', async () => {
+    const { fake, agent } = withAgent();
+    const hook = renderWired(fake.room);
+
+    await act(async () => {
+      await hook.result.current.startShare();
+    });
+
+    // Exactly what the worker needs to write the audit row: who started it and what the
+    // browser picker actually handed over. Without it the share is recorded as
+    // "pre_existing" with an unknown surface.
+    expect(consentNotifications(fake)).toEqual([
+      {
+        v: SCREENSHARE_PROTOCOL_VERSION,
+        event: 'consent',
+        initiated_by: 'caller',
+        result: 'granted',
+        surface: 'window',
+        track_sid: 'TR_screen_1',
+      },
+    ]);
+    expect(lastRpc(fake).method).toBe(RPC_NOTIFY);
+    expect(lastRpc(fake).destinationIdentity).toBe(agent.identity);
+    expect(hook.result.current.isSharing).toBe(true);
+  });
+
+  it('still sends exactly one stopped notification for that same share', async () => {
+    // The regression guard for the shared sender: the two notifiers must not make the
+    // stop path send twice, or differently.
+    const { fake } = withAgent();
+    const hook = renderWired(fake.room);
+
+    await act(async () => {
+      await hook.result.current.startShare();
+    });
+    await act(async () => {
+      await hook.result.current.stopShare('caller_stop');
+    });
+
+    expect(stopNotifications(fake)).toEqual([
+      {
+        v: SCREENSHARE_PROTOCOL_VERSION,
+        event: 'stopped',
+        initiated_by: 'caller',
+        reason: 'caller_stop',
+      },
+    ]);
+    expect(notifications(fake)).toHaveLength(2);
+  });
+
+  it('says nothing about a share the agent asked for', async () => {
+    const { fake } = withAgent();
+    const hook = renderWired(fake.room);
+
+    // The agent already knows it asked; the answer travels back on the request's own
+    // RPC. A `consent` notify here would be the same fact recorded twice.
+    await shareUntilGranted(fake.rpcHandlers, hook);
+
+    expect(consentNotifications(fake)).toEqual([]);
+  });
+
+  it('swallows an announcement the agent cannot answer', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { fake } = withAgent();
+    fake.performRpc.mockRejectedValue(new Error('UNSUPPORTED_METHOD'));
+    const hook = renderWired(fake.room);
+
+    await act(async () => {
+      // The share itself must still succeed: nothing here may degrade the call.
+      expect((await hook.result.current.startShare()).result).toBe('granted');
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(hook.result.current.isSharing).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('could not tell the agent about the caller-started share'),
+      expect.anything()
+    );
   });
 });

@@ -721,6 +721,79 @@ describe('useScreenshareSession', () => {
     });
   });
 
+  describe('onCallerConsent', () => {
+    it('reports the picker outcome once for a share the caller started', async () => {
+      const outcomes: RequestConsentResponse[] = [];
+      const { room } = createGrantedRoom();
+      const hook = renderSession(room, {
+        onCallerConsent: (response) => outcomes.push(response),
+      });
+
+      await act(async () => {
+        await hook.result.current.startShare();
+      });
+
+      // The fake publication's own values: this is the surface the caller really picked
+      // and the track the agent will see, which is exactly what the audit row needs.
+      expect(outcomes).toEqual([
+        {
+          v: SCREENSHARE_PROTOCOL_VERSION,
+          result: 'granted',
+          surface: 'window',
+          track_sid: 'TR_screen_1',
+        },
+      ]);
+      expect(hook.result.current.isSharing).toBe(true);
+    });
+
+    it('reports a picker the caller dismissed as cancelled, once', async () => {
+      const outcomes: RequestConsentResponse[] = [];
+      const { room, setScreenShareEnabled } = createGrantedRoom();
+      setScreenShareEnabled.mockRejectedValueOnce(
+        Object.assign(new Error('denied'), { name: 'NotAllowedError' })
+      );
+      const hook = renderSession(room, {
+        onCallerConsent: (response) => outcomes.push(response),
+      });
+
+      await act(async () => {
+        await hook.result.current.startShare();
+      });
+
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]).toMatchObject({ result: 'cancelled' });
+      expect(hook.result.current.isSharing).toBe(false);
+    });
+
+    it('says nothing for the pre-checks that never opened a picker', async () => {
+      const outcomes: RequestConsentResponse[] = [];
+
+      // No consent happened: the worker never widened the permission, so there was
+      // nothing to agree to and no picker to answer.
+      const ungranted = createFakeRoom();
+      const denied = renderSession(ungranted.room, {
+        onCallerConsent: (response) => outcomes.push(response),
+      });
+      await act(async () => {
+        expect((await denied.result.current.startShare()).reason).toBe('not_permitted');
+      });
+      expect(outcomes).toEqual([]);
+      expect(ungranted.setScreenShareEnabled).not.toHaveBeenCalled();
+
+      // ...and likewise on a browser that cannot capture a display at all.
+      stubNavigator({ capable: false });
+      const incapable = createGrantedRoom();
+      const unsupported = renderSession(incapable.room, {
+        onCallerConsent: (response) => outcomes.push(response),
+      });
+      await act(async () => {
+        expect((await unsupported.result.current.startShare()).result).toBe('unsupported');
+      });
+      expect(outcomes).toEqual([]);
+      expect(incapable.setScreenShareEnabled).not.toHaveBeenCalled();
+    });
+  });
+
   describe('the share control is gated on an agent that can receive the share', () => {
     it('offers nothing until such an agent is in the room', async () => {
       const fake = createGrantedRoom();
