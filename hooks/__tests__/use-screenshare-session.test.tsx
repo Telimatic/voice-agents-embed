@@ -859,6 +859,71 @@ describe('useScreenshareSession', () => {
     });
   });
 
+  describe('an agent that stops accepting the share', () => {
+    // An agent-to-agent transfer keeps the same participant; a receiving agent with the
+    // feature off retracts the attribute on it. Nobody disconnects.
+    it('ends a live share, once, when the agent still in the room retracts enabled', async () => {
+      const reasons: StopReason[] = [];
+      const fake = createGrantedRoom();
+      const agent = fakeAgent();
+      fake.remoteParticipants.set(agent.identity, agent);
+      const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+      await shareUntilGranted(fake.rpcHandlers, hook);
+      await waitFor(() => expect(hook.result.current.agentReady).toBe(true));
+      expect(hook.result.current.isSharing).toBe(true);
+
+      act(() => fake.setParticipantAttributes(agent, { [ATTR_ENABLED]: 'false' }));
+
+      await waitFor(() => expect(reasons).toEqual(['agent_left']));
+      expect(fake.setScreenShareEnabled).toHaveBeenLastCalledWith(false);
+      expect(hook.result.current.isSharing).toBe(false);
+      expect(hook.result.current.canShare).toBe(false);
+      // One stop, one report: the worker's own screenshare.stop arriving after this finds
+      // nothing to take down.
+      await act(async () => {
+        await invokeStop(fake.rpcHandlers.get(RPC_STOP)!);
+      });
+      expect(reasons).toEqual(['agent_left']);
+    });
+
+    it('does nothing when the agent retracts enabled and nothing is being shared', async () => {
+      const reasons: StopReason[] = [];
+      const fake = createGrantedRoom();
+      const agent = fakeAgent();
+      fake.remoteParticipants.set(agent.identity, agent);
+      const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+      await waitFor(() => expect(hook.result.current.agentReady).toBe(true));
+
+      act(() => fake.setParticipantAttributes(agent, { [ATTR_ENABLED]: 'false' }));
+      await waitFor(() => expect(hook.result.current.agentReady).toBe(false));
+
+      expect(reasons).toEqual([]);
+      expect(fake.setScreenShareEnabled).not.toHaveBeenCalledWith(false);
+    });
+
+    it('leaves an agent that has GONE to the departure path and its grace window', async () => {
+      vi.useFakeTimers();
+      try {
+        const reasons: StopReason[] = [];
+        const fake = createGrantedRoom();
+        const agent = fakeAgent();
+        fake.remoteParticipants.set(agent.identity, agent);
+        const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+        await shareUntilGrantedWithFakeTimers(fake.rpcHandlers, hook);
+
+        // agentReady goes false here too, but the agent is absent, not retracting.
+        act(() => fake.removeParticipant(agent));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(reasons).toEqual([]);
+        expect(hook.result.current.isSharing).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('agent_left', () => {
     it('ends the share, once, when the agent goes', async () => {
       vi.useFakeTimers();

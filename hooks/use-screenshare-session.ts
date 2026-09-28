@@ -662,6 +662,39 @@ export function useScreenshareSession(
     };
   }, [room, stopShare]);
 
+  // A share the agent no longer accepts is over too. An agent-to-agent transfer inside the
+  // worker keeps the SAME participant, so the departure path above never fires for it:
+  // when the receiving agent's policy is off, the worker retracts `telzino.screenshare.enabled`
+  // on the participant that is still here. `canShare` then hides the control, but a share
+  // already published would keep running -- and the banner keep saying the caller is
+  // sharing -- with no agent reading it. Same single stop path as every other end.
+  //
+  // Only an agent that is still PRESENT but no longer ready counts. An agent that is gone
+  // also turns `agentReady` false, and that is the departure path's to judge, grace window
+  // and all: acting on it here would tear a share down on a reconnect blip.
+  const agentReadyRef = useRef<boolean>(agentReady);
+  useEffect(() => {
+    const wasReady = agentReadyRef.current;
+    agentReadyRef.current = agentReady;
+    if (!room || !wasReady || agentReady) {
+      return;
+    }
+    if (room.state !== 'connected' || stopReasonRef.current) {
+      return;
+    }
+    const agentStillHere = Array.from(room.remoteParticipants?.values() ?? []).some((remote) =>
+      isAgentParticipant(remote as AgentParticipantLike)
+    );
+    if (!agentStillHere) {
+      return;
+    }
+    // Nothing published means nothing to stop, and nothing to report.
+    if (!room.localParticipant.getTrackPublication(Track.Source.ScreenShare)) {
+      return;
+    }
+    void stopShare('agent_left');
+  }, [room, agentReady, stopShare]);
+
   // The panel can close with a request still outstanding; the agent is told rather than
   // left waiting for a promise nobody will ever settle. A capture still in flight is
   // caught by the ownership check in acceptConsent, which runs even after unmount.
