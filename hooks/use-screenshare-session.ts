@@ -12,6 +12,7 @@ import { useRoomContext } from '@livekit/components-react';
 import { usePublishPermissions } from '@/hooks/use-publish-permissions';
 import {
   type AgentParticipantLike,
+  agentCanReceiveShare,
   isAgentParticipant,
   useScreenshareAgent,
 } from '@/hooks/use-screenshare-peer';
@@ -673,19 +674,28 @@ export function useScreenshareSession(
   // also turns `agentReady` false, and that is the departure path's to judge, grace window
   // and all: acting on it here would tear a share down on a reconnect blip.
   const agentReadyRef = useRef<boolean>(agentReady);
-  useEffect(() => {
-    const wasReady = agentReadyRef.current;
-    agentReadyRef.current = agentReady;
-    if (!room || !wasReady || agentReady) {
+  /**
+   * A withdrawal seen while the room was not connected. The effect below runs only when
+   * `agentReady` changes, so without this a retraction that lands mid-reconnect would be
+   * recorded and never acted on: nothing re-runs the effect once the room is back.
+   */
+  const withdrawalDeferredRef = useRef(false);
+
+  /**
+   * Stop the share if the agent in the room no longer accepts it. Re-checks everything, and
+   * reads readiness off the room itself rather than `agentReady`: after a reconnect the SDK
+   * repopulates `remoteParticipants` without emitting the events that state is derived from,
+   * so the state can still describe the room as it was before the restart.
+   */
+  const stopIfAgentWithdrew = useCallback(() => {
+    if (!room || room.state !== 'connected' || stopReasonRef.current) {
       return;
     }
-    if (room.state !== 'connected' || stopReasonRef.current) {
+    const remotes = Array.from(room.remoteParticipants?.values() ?? []) as AgentParticipantLike[];
+    if (remotes.some((remote) => agentCanReceiveShare(remote))) {
       return;
     }
-    const agentStillHere = Array.from(room.remoteParticipants?.values() ?? []).some((remote) =>
-      isAgentParticipant(remote as AgentParticipantLike)
-    );
-    if (!agentStillHere) {
+    if (!remotes.some((remote) => isAgentParticipant(remote))) {
       return;
     }
     // Nothing published means nothing to stop, and nothing to report.
@@ -693,7 +703,45 @@ export function useScreenshareSession(
       return;
     }
     void stopShare('agent_left');
-  }, [room, agentReady, stopShare]);
+  }, [room, stopShare]);
+
+  useEffect(() => {
+    const wasReady = agentReadyRef.current;
+    agentReadyRef.current = agentReady;
+    if (agentReady) {
+      withdrawalDeferredRef.current = false;
+      return;
+    }
+    if (!room || !wasReady) {
+      return;
+    }
+    if (room.state !== 'connected') {
+      withdrawalDeferredRef.current = true;
+      return;
+    }
+    stopIfAgentWithdrew();
+  }, [room, agentReady, stopIfAgentWithdrew]);
+
+  // The deferred half. By the time Reconnected is emitted the state is `connected` and
+  // `remoteParticipants` has been repopulated, so the checks see the room as it now is: an
+  // agent that came back ready clears the deferral above, and one that is gone is left to
+  // the departure path.
+  useEffect(() => {
+    if (!room) {
+      return;
+    }
+    const onReconnected = () => {
+      if (!withdrawalDeferredRef.current) {
+        return;
+      }
+      withdrawalDeferredRef.current = false;
+      stopIfAgentWithdrew();
+    };
+    room.on(RoomEvent.Reconnected, onReconnected);
+    return () => {
+      room.off(RoomEvent.Reconnected, onReconnected);
+    };
+  }, [room, stopIfAgentWithdrew]);
 
   // The panel can close with a request still outstanding; the agent is told rather than
   // left waiting for a promise nobody will ever settle. A capture still in flight is

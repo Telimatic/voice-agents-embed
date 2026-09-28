@@ -901,6 +901,58 @@ describe('useScreenshareSession', () => {
       expect(fake.setScreenShareEnabled).not.toHaveBeenCalledWith(false);
     });
 
+    it('acts on a retraction that landed while the room was reconnecting, once it is back', async () => {
+      const reasons: StopReason[] = [];
+      const fake = createGrantedRoom();
+      const agent = fakeAgent();
+      fake.remoteParticipants.set(agent.identity, agent);
+      const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+      await shareUntilGranted(fake.rpcHandlers, hook);
+      await waitFor(() => expect(hook.result.current.agentReady).toBe(true));
+
+      // The retraction arrives mid-reconnect: nothing may be torn down yet...
+      fake.room.state = 'reconnecting';
+      act(() => fake.setParticipantAttributes(agent, { [ATTR_ENABLED]: 'false' }));
+      await waitFor(() => expect(hook.result.current.agentReady).toBe(false));
+      expect(reasons).toEqual([]);
+      expect(hook.result.current.isSharing).toBe(true);
+
+      // ...but it must not be forgotten either: agentReady does not change again, so only
+      // the reconnect can bring it back.
+      fake.room.state = 'connected';
+      act(() => {
+        fake.room.emit(RoomEvent.Reconnected);
+      });
+      await waitFor(() => expect(reasons).toEqual(['agent_left']));
+      expect(hook.result.current.isSharing).toBe(false);
+    });
+
+    it('does not stop after a reconnect if the agent came back still accepting the share', async () => {
+      const reasons: StopReason[] = [];
+      const fake = createGrantedRoom();
+      const agent = fakeAgent();
+      fake.remoteParticipants.set(agent.identity, agent);
+      const hook = renderSession(fake.room, { onStopped: (reason) => reasons.push(reason) });
+      await shareUntilGranted(fake.rpcHandlers, hook);
+      await waitFor(() => expect(hook.result.current.agentReady).toBe(true));
+
+      fake.room.state = 'reconnecting';
+      act(() => fake.setParticipantAttributes(agent, { [ATTR_ENABLED]: 'false' }));
+      await waitFor(() => expect(hook.result.current.agentReady).toBe(false));
+      act(() => fake.setParticipantAttributes(agent, { [ATTR_ENABLED]: 'true' }));
+      await waitFor(() => expect(hook.result.current.agentReady).toBe(true));
+
+      fake.room.state = 'connected';
+      act(() => {
+        fake.room.emit(RoomEvent.Reconnected);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(reasons).toEqual([]);
+      expect(hook.result.current.isSharing).toBe(true);
+    });
+
     it('leaves an agent that has GONE to the departure path and its grace window', async () => {
       vi.useFakeTimers();
       try {
