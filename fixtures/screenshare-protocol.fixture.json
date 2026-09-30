@@ -1,0 +1,55 @@
+{
+  "protocolVersion": 1,
+  "rpcMethods": {
+    "requestConsent": "screenshare.requestConsent",
+    "stop": "screenshare.stop",
+    "notify": "screenshare.notify"
+  },
+  "attributes": {
+    "capable": "telzino.screenshare.capable",
+    "enabled": "telzino.screenshare.enabled",
+    "allowedSurfaces": "telzino.screenshare.allowed_surfaces"
+  },
+  "attributeValues": ["true", "false"],
+  "enums": {
+    "shareSurface": ["browser", "window", "monitor"],
+    "consentResult": ["granted", "declined", "timeout", "cancelled", "failed", "unsupported"],
+    "stopReason": ["caller_stop", "browser_stop", "agent_end", "agent_left"],
+    "notifyEvent": ["consent", "started", "stopped", "failed"],
+    "initiatedBy": ["agent", "caller"]
+  },
+  "examples": {
+    "allowedSurfacesAttributeValue": "browser,window",
+    "requestConsentPayload": {
+      "v": 1,
+      "scope": ["browser", "window", "monitor"],
+      "viewers": [{ "role": "agent" }],
+      "timeout_seconds": 30
+    },
+    "requestConsentResponse": {
+      "v": 1,
+      "result": "granted",
+      "surface": "browser",
+      "track_sid": "TR_AbCdEfGhIjKlMnOp"
+    },
+    "stopPayload": {
+      "v": 1
+    },
+    "stopResponse": {
+      "v": 1,
+      "stopped": true
+    },
+    "notifyPayload": {
+      "v": 1,
+      "event": "started",
+      "initiated_by": "caller",
+      "result": "granted",
+      "surface": "browser",
+      "track_sid": "TR_AbCdEfGhIjKlMnOp"
+    },
+    "notifyResponse": {
+      "v": 1,
+      "ok": true
+    }
+  }
+}

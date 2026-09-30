@@ -87,10 +87,14 @@ This starter is designed to be flexible so you can adapt it to your specific age
 export const APP_CONFIG_DEFAULTS = {
   supportsChatInput: true,
   supportsVideoInput: true,
-  supportsScreenShare: true,
   isPreConnectBufferEnabled: true,
 };
 ```
+
+> `supportsScreenShare` is no longer an app-config flag (TLZ-561). Screenshare is resolved
+> per session — the token's capability grant, whether the browser can capture a display,
+> and whether an agent that can receive the share is in the room — so a build-time flag
+> here could only ever contradict it.
 
 You can update these values in [`app-config.ts`](./app-config.ts) to customize branding, features, and UI text for your deployment.
 

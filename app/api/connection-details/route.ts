@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { AccessToken, type AccessTokenOptions, type VideoGrant } from 'livekit-server-sdk';
-import { RoomConfiguration } from '@livekit/protocol';
+import { RoomConfiguration, TrackSource } from '@livekit/protocol';
+import { ATTR_CAPABLE } from '@/lib/screenshare-protocol';
 
 // NOTE: you are expected to define the following environment variables in `.env.local`:
 const API_KEY = process.env.LIVEKIT_API_KEY;
@@ -36,6 +37,10 @@ export async function POST(req: Request) {
 
     // Generate participant token
     const participantName = body?.participantName || 'Guest';
+    // A4: does this BROWSER have a usable getDisplayMedia at all (lib/screenshare-capability.ts)?
+    // Reported by the client and stamped into the token below rather than written by the
+    // participant after joining — see createParticipantToken.
+    const capable: boolean = body?.capable === true;
     const participantIdentity = `embed_user_${Date.now()}_${Math.floor(Math.random() * 10_000)}`;
 
     // Room name format: agent-{agentId}-{timestamp}
@@ -48,6 +53,7 @@ export async function POST(req: Request) {
     const participantToken = await createParticipantToken(
       { identity: participantIdentity, name: participantName },
       roomName,
+      capable,
       agentName
     );
 
@@ -88,11 +94,30 @@ export async function OPTIONS() {
 function createParticipantToken(
   userInfo: AccessTokenOptions,
   roomName: string,
+  capable: boolean,
   agentName?: string
 ): Promise<string> {
   const at = new AccessToken(API_KEY, API_SECRET, {
     ...userInfo,
     ttl: '15m',
+    // A4: stamped into the token, NOT written by the participant after joining.
+    //
+    // This route is public with CORS `*`, so anyone can mint a token and join any agent's
+    // room as `embed_user_*`. Granting `canUpdateOwnMetadata` so the widget could call
+    // setAttributes() would let that anonymous participant write ANY attribute key:
+    // LiveKit's server applies no prefix filtering (pkg/rtc/participant.go SetAttributes
+    // stores every key it is given). The worker reads caller identity off participant
+    // attributes — the unprefixed `caller` key first, then `sip.*` — with no participant-
+    // kind check, and the widget joins before the agent enumerates participants. A
+    // tampered page could therefore have set `caller: '+1555...'` and fed known-caller
+    // detection, caller-ID pre-auth, TeamMate webhooks and the NetSapiens PIN gate an
+    // attacker-controlled number.
+    //
+    // Minting the one attribute we actually need keeps the worker protocol identical (it
+    // reads the attribute off the participant regardless of who set it) while leaving the
+    // participant with no attribute-write permission at all. Deviates from spec §2.2,
+    // which did not consider this vector.
+    attributes: { [ATTR_CAPABLE]: capable ? 'true' : 'false' },
   });
   const grant: VideoGrant = {
     room: roomName,
@@ -100,6 +125,16 @@ function createParticipantToken(
     canPublish: true,
     canPublishData: true,
     canSubscribe: true,
+    // TLZ-561. The grant is FIXED at mint: no organization policy is consulted here, and
+    // SCREEN_SHARE is never in a token. The worker, which is the one party that resolves
+    // policy for a session, widens the participant's permission at runtime once the
+    // resolver has approved it (UpdateParticipant). Until then the server refuses a
+    // screen track whatever a tampered client asks for.
+    //
+    // CAMERA stays: the base grant before TLZ-561 carried no canPublishSources at all,
+    // which LiveKit treats as "every source permitted", and camera publishing is gated
+    // by the unrelated supportsVideoInput / remote config, not by this feature.
+    canPublishSources: [TrackSource.CAMERA, TrackSource.MICROPHONE],
   };
   at.addGrant(grant);
 

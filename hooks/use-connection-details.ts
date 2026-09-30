@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { decodeJwt } from 'jose';
 import { ConnectionDetails } from '@/app/api/connection-details/route';
+import { canCaptureDisplay } from '@/lib/screenshare-capability';
 import { AppConfig } from '@/lib/types';
 
 const ONE_MINUTE_IN_MILLISECONDS = 60 * 1000;
@@ -34,6 +35,10 @@ export default function useConnectionDetails(appConfig: AppConfig) {
         },
         body: JSON.stringify({
           agentId: appConfig.agentId,
+          // A4: whether this browser can capture a display at all. Reported here and
+          // stamped into the token server-side, because the participant itself has no
+          // permission to write attributes — see createParticipantToken for why.
+          capable: canCaptureDisplay(),
           room_config: appConfig.agentName
             ? {
                 agents: [{ agent_name: appConfig.agentName }],
