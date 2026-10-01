@@ -39,7 +39,18 @@ function isAppleMobile(userAgent: string, maxTouchPoints: number): boolean {
  * never offered, while a false positive costs them a failed capture after they have
  * already said yes -- and leaves the agent waiting on a share that will never arrive.
  */
-export function canCaptureDisplay(): boolean {
+export interface CanCaptureDisplayOptions {
+  /**
+   * Only for a page served inside a customer's iframe (the playground): whether the embed
+   * code says it granted `display-capture`. Consulted only when the browser cannot report
+   * Permissions-Policy itself (Firefox, Safari) and the page is framed. Left undefined, a
+   * page keeps the original rule: unknown means allowed (the popup lives on the
+   * customer's own page and must not lose sharing when that page happens to be framed).
+   */
+  framedCaptureGranted?: boolean;
+}
+
+export function canCaptureDisplay(options: CanCaptureDisplayOptions = {}): boolean {
   // `navigator` is absent during SSR, and vi.stubGlobal can set it to undefined.
   if (typeof navigator === 'undefined' || !navigator) {
     return false;
@@ -49,7 +60,7 @@ export function canCaptureDisplay(): boolean {
     return false;
   }
 
-  if (!displayCaptureAllowedByPolicy()) {
+  if (!displayCaptureAllowedByPolicy(options.framedCaptureGranted)) {
     return false;
   }
 
@@ -67,11 +78,13 @@ export function canCaptureDisplay(): boolean {
  * widget showed the consent prompt, opened nothing, and wrote `cancelled` to the audit row
  * as though the caller had declined.
  *
- * `document.featurePolicy` is non-standard and Chromium-only, so this is deliberately a
- * one-way test: an explicit `false` suppresses the offer, and everything else (including
- * every browser without the API) leaves behaviour exactly as it was.
+ * `document.featurePolicy` is non-standard and Chromium-only. An explicit answer is
+ * trusted either way. Without one (Firefox, Safari) the answer is "allowed", except on a
+ * framed page whose caller passed `framedCaptureGranted`: there the embed code's own
+ * declaration decides. Old playground snippets grant only `allow="microphone"`, and
+ * offering the share there shows the prompt and then fails in the browser.
  */
-function displayCaptureAllowedByPolicy(): boolean {
+function displayCaptureAllowedByPolicy(framedCaptureGranted?: boolean): boolean {
   if (typeof document === 'undefined') {
     return true;
   }
@@ -80,7 +93,26 @@ function displayCaptureAllowedByPolicy(): boolean {
       featurePolicy?: { allowsFeature?: (feature: string) => boolean };
     }
   ).featurePolicy;
-  return policy?.allowsFeature?.('display-capture') !== false;
+  const allows = policy?.allowsFeature?.('display-capture');
+  if (typeof allows === 'boolean') {
+    return allows;
+  }
+  if (framedCaptureGranted !== undefined && isInIframe()) {
+    return framedCaptureGranted;
+  }
+  return true;
+}
+
+/** Whether this document is framed. A cross-origin parent makes `top` unreadable: framed. */
+function isInIframe(): boolean {
+  if (typeof window === 'undefined' || !window) {
+    return false;
+  }
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
 }
 
 /**

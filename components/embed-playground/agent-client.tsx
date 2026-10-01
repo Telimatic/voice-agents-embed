@@ -25,7 +25,16 @@ export default function PlaygroundAgentClient({
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<EmbedErrorDetails | null>(null);
-  const { refreshConnectionDetails } = useConnectionDetails(appConfig);
+  // TLZ-561: the playground is embedded in the customer's iframe. Embed code that grants
+  // display-capture also adds screenshare=1 to the URL; old snippets (microphone only) do
+  // not, and Firefox/Safari cannot report the iframe's policy, so that is the only signal.
+  const framedCaptureGranted = useMemo(
+    () =>
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('screenshare') === '1',
+    []
+  );
+  const { refreshConnectionDetails } = useConnectionDetails(appConfig, { framedCaptureGranted });
 
   useEffect(() => {
     const onConnected = async () => {

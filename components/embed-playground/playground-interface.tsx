@@ -1,9 +1,28 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { RoomEvent } from 'livekit-client';
-import { DisconnectButton, useRoomContext, useVoiceAssistant } from '@livekit/components-react';
-import { PhoneDisconnectIcon, PhoneIcon, SparkleIcon } from '@phosphor-icons/react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RoomEvent, Track } from 'livekit-client';
+import {
+  DisconnectButton,
+  type TrackReference,
+  useLocalParticipant,
+  useRoomContext,
+  useVoiceAssistant,
+} from '@livekit/components-react';
+import {
+  MonitorArrowUpIcon,
+  PhoneDisconnectIcon,
+  PhoneIcon,
+  SparkleIcon,
+  SpinnerIcon,
+} from '@phosphor-icons/react';
+import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
+import { ShareBanner } from '@/components/embed-popup/share-banner';
+import {
+  useScreenshareCallerConsentNotifier,
+  useScreenshareStopNotifier,
+} from '@/hooks/use-screenshare-peer';
+import { useScreenshareSession } from '@/hooks/use-screenshare-session';
 import { cn } from '@/lib/utils';
 import type { TranscriptMessage } from '@/types/playground';
 import { MicSelector } from './mic-selector';
@@ -15,6 +34,54 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const room = useRoomContext();
+
+  // TLZ-561. The same screenshare wiring as the popup (popup-view.tsx): the session hook
+  // owns the consent prompt and the screen track, and offers a share only once the worker
+  // has widened this participant's publish permission and a share-capable agent is in the
+  // room. Without it the agent could ask for a screen this page had no way to answer.
+  const { isScreenShareEnabled, localParticipant } = useLocalParticipant();
+  const screenSharePublication = localParticipant?.getTrackPublication(Track.Source.ScreenShare);
+  const localScreenShareTrack = useMemo<TrackReference | undefined>(
+    () =>
+      screenSharePublication
+        ? {
+            source: Track.Source.ScreenShare,
+            participant: localParticipant,
+            publication: screenSharePublication,
+          }
+        : undefined,
+    [screenSharePublication, localParticipant]
+  );
+  const [sharePending, setSharePending] = useState(false);
+  const notifyStopped = useScreenshareStopNotifier();
+  const notifyCallerConsent = useScreenshareCallerConsentNotifier();
+  const { canShare, consentRequest, acceptConsent, declineConsent, startShare, stopShare } =
+    useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
+
+  /** The one Stop path the page owns, shared by the banner and the share button. */
+  const handleStopShare = useCallback(async () => {
+    setSharePending(true);
+    try {
+      await stopShare('caller_stop');
+    } finally {
+      setSharePending(false);
+    }
+  }, [stopShare]);
+
+  const handleShareToggle = useCallback(() => {
+    void (async () => {
+      if (isScreenShareEnabled) {
+        await handleStopShare();
+        return;
+      }
+      setSharePending(true);
+      try {
+        await startShare();
+      } finally {
+        setSharePending(false);
+      }
+    })();
+  }, [handleStopShare, isScreenShareEnabled, startShare]);
 
   // Listen to transcription events
   useEffect(() => {
@@ -59,7 +126,7 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
   }, [messages]);
 
   return (
-    <div className="bg-embed-bg border-separator1 flex h-full w-full flex-col overflow-hidden rounded-2xl border">
+    <div className="bg-embed-bg border-separator1 relative flex h-full w-full flex-col overflow-hidden rounded-2xl border">
       {/* Header */}
       <div className="border-separator1 bg-bg1/50 z-10 flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
@@ -132,6 +199,27 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
       <div className="bg-bg1 border-separator1 relative z-20 shrink-0 border-t p-4">
         <div className="flex w-full items-center justify-center gap-3">
           <MicToggle />
+          {canShare && (
+            <button
+              type="button"
+              aria-label={isScreenShareEnabled ? 'Stop sharing your screen' : 'Share your screen'}
+              aria-pressed={isScreenShareEnabled}
+              onClick={handleShareToggle}
+              disabled={sharePending}
+              className={cn(
+                'flex h-9 w-9 items-center justify-center rounded-full border transition-all duration-200 disabled:opacity-60',
+                isScreenShareEnabled
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-bg2 text-fg1 border-separator1 hover:bg-bg3 hover:border-separator2'
+              )}
+            >
+              {sharePending ? (
+                <SpinnerIcon size={16} weight="bold" className="animate-spin" />
+              ) : (
+                <MonitorArrowUpIcon size={16} weight="bold" />
+              )}
+            </button>
+          )}
           <StatusBadge state={state} />
           <DisconnectButton>
             <div className="bg-destructive hover:bg-destructive-hover text-destructive-foreground border-destructive flex h-9 cursor-pointer items-center gap-1.5 rounded-full border px-4 py-2 text-xs font-semibold transition-all">
@@ -141,6 +229,38 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
           </DisconnectButton>
         </div>
       </div>
+
+      {/* Sharing indicator. Publication state, not the hook's flag, so the banner reflects
+          what is actually being published. */}
+      {isScreenShareEnabled && (
+        <ShareBanner
+          trackRef={localScreenShareTrack}
+          stopping={sharePending}
+          onStop={() => {
+            void handleStopShare();
+          }}
+        />
+      )}
+
+      {/* The iframe theme sets --background to transparent so the page blends into the
+          host, which leaves the overlay's own bg-background with no fill here: the
+          transcript showed through it. This layer gives it the playground's solid
+          background; the overlay itself is shared with the popup and left unchanged. */}
+      {consentRequest && (
+        <div className="bg-embed-bg absolute inset-0 z-30 rounded-2xl">
+          <ConsentOverlay
+            agentName={agentName}
+            surfaces={consentRequest.surfaces}
+            timeoutSeconds={consentRequest.timeoutSeconds}
+            expiresAt={consentRequest.expiresAt}
+            capturing={consentRequest.capturing}
+            onAccept={() => {
+              void acceptConsent();
+            }}
+            onDecline={declineConsent}
+          />
+        </div>
+      )}
     </div>
   );
 }

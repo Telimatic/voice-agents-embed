@@ -58,6 +58,52 @@ describe('canCaptureDisplay — Permissions-Policy', () => {
     expect(canCaptureDisplay()).toBe(true);
   });
 
+  it('keeps the original rule by default, even inside an iframe (the popup)', () => {
+    // The popup is injected into the customer's own page, which may itself be framed (a
+    // CMS widget, a site-builder preview). Without an API to ask, it stays allowed.
+    stubEnv({ policyAllows: 'no-api' });
+    vi.stubGlobal('window', { self: {}, top: {} });
+    expect(canCaptureDisplay()).toBe(true);
+  });
+
+  it('is false in a framed playground whose embed code did not declare the grant', () => {
+    // Firefox/Safari in an old playground snippet (allow="microphone" only): no API to
+    // ask, so the embed code's declaration decides.
+    stubEnv({ policyAllows: 'no-api' });
+    vi.stubGlobal('window', { self: {}, top: {} });
+    expect(canCaptureDisplay({ framedCaptureGranted: false })).toBe(false);
+  });
+
+  it('is true in a framed playground whose embed code declared the grant', () => {
+    stubEnv({ policyAllows: 'no-api' });
+    vi.stubGlobal('window', { self: {}, top: {} });
+    expect(canCaptureDisplay({ framedCaptureGranted: true })).toBe(true);
+  });
+
+  it('treats a cross-origin parent (window.top unreadable) as an iframe', () => {
+    stubEnv({ policyAllows: 'no-api' });
+    vi.stubGlobal('window', {
+      self: {},
+      get top() {
+        throw new Error('SecurityError');
+      },
+    });
+    expect(canCaptureDisplay({ framedCaptureGranted: false })).toBe(false);
+  });
+
+  it('ignores the declaration on a top-level page', () => {
+    stubEnv({ policyAllows: 'no-api' });
+    const same = {};
+    vi.stubGlobal('window', { self: same, top: same });
+    expect(canCaptureDisplay({ framedCaptureGranted: false })).toBe(true);
+  });
+
+  it('trusts the browser over the declaration when it can answer', () => {
+    stubEnv({ policyAllows: false });
+    vi.stubGlobal('window', { self: {}, top: {} });
+    expect(canCaptureDisplay({ framedCaptureGranted: true })).toBe(false);
+  });
+
   it('does not throw when document is absent, as during SSR', () => {
     stubEnv({ policyAllows: 'no-document' });
     expect(() => canCaptureDisplay()).not.toThrow();
