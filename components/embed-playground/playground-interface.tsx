@@ -242,18 +242,24 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
         />
       )}
 
+      {/* The iframe theme sets --background to transparent so the page blends into the
+          host, which leaves the overlay's own bg-background with no fill here: the
+          transcript showed through it. This layer gives it the playground's solid
+          background; the overlay itself is shared with the popup and left unchanged. */}
       {consentRequest && (
-        <ConsentOverlay
-          agentName={agentName}
-          surfaces={consentRequest.surfaces}
-          timeoutSeconds={consentRequest.timeoutSeconds}
-          expiresAt={consentRequest.expiresAt}
-          capturing={consentRequest.capturing}
-          onAccept={() => {
-            void acceptConsent();
-          }}
-          onDecline={declineConsent}
-        />
+        <div className="bg-embed-bg absolute inset-0 z-30 rounded-2xl">
+          <ConsentOverlay
+            agentName={agentName}
+            surfaces={consentRequest.surfaces}
+            timeoutSeconds={consentRequest.timeoutSeconds}
+            expiresAt={consentRequest.expiresAt}
+            capturing={consentRequest.capturing}
+            onAccept={() => {
+              void acceptConsent();
+            }}
+            onDecline={declineConsent}
+          />
+        </div>
       )}
     </div>
   );

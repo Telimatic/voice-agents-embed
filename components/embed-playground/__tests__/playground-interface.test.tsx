@@ -90,5 +90,8 @@ describe('PlaygroundInterface screenshare (TLZ-561)', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain('Raven would like to see your screen');
+    // The iframe theme makes --background transparent, so the overlay's own fill is
+    // nothing here; without this solid layer the transcript shows through the prompt.
+    expect(dialog.parentElement?.className).toContain('bg-embed-bg');
   });
 });
