@@ -58,6 +58,33 @@ describe('canCaptureDisplay — Permissions-Policy', () => {
     expect(canCaptureDisplay()).toBe(true);
   });
 
+  it('is false inside an iframe when the browser cannot say whether capture is allowed', () => {
+    // Firefox/Safari in the customer's iframe snippet (allow="microphone" only): no API to
+    // ask, and the frame almost certainly forbids display-capture. Offering the share there
+    // shows the consent prompt and then fails in the browser.
+    stubEnv({ policyAllows: 'no-api' });
+    const top = {};
+    vi.stubGlobal('window', { self: {}, top });
+    expect(canCaptureDisplay()).toBe(false);
+  });
+
+  it('treats a cross-origin parent (window.top unreadable) as an iframe', () => {
+    stubEnv({ policyAllows: 'no-api' });
+    vi.stubGlobal('window', {
+      self: {},
+      get top() {
+        throw new Error('SecurityError');
+      },
+    });
+    expect(canCaptureDisplay()).toBe(false);
+  });
+
+  it('still trusts an explicit allow inside an iframe', () => {
+    stubEnv({ policyAllows: true });
+    vi.stubGlobal('window', { self: {}, top: {} });
+    expect(canCaptureDisplay()).toBe(true);
+  });
+
   it('does not throw when document is absent, as during SSR', () => {
     stubEnv({ policyAllows: 'no-document' });
     expect(() => canCaptureDisplay()).not.toThrow();

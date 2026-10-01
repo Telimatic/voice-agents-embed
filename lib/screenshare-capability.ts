@@ -67,9 +67,11 @@ export function canCaptureDisplay(): boolean {
  * widget showed the consent prompt, opened nothing, and wrote `cancelled` to the audit row
  * as though the caller had declined.
  *
- * `document.featurePolicy` is non-standard and Chromium-only, so this is deliberately a
- * one-way test: an explicit `false` suppresses the offer, and everything else (including
- * every browser without the API) leaves behaviour exactly as it was.
+ * `document.featurePolicy` is non-standard and Chromium-only. An explicit answer is
+ * trusted either way. Without one (Firefox, Safari), a top-level document is assumed
+ * allowed, but a document inside an iframe is NOT: the customer snippets for the
+ * playground and the inline bar grant only `allow="microphone"`, so there the prompt would
+ * appear and the capture would then fail in the browser.
  */
 function displayCaptureAllowedByPolicy(): boolean {
   if (typeof document === 'undefined') {
@@ -80,7 +82,23 @@ function displayCaptureAllowedByPolicy(): boolean {
       featurePolicy?: { allowsFeature?: (feature: string) => boolean };
     }
   ).featurePolicy;
-  return policy?.allowsFeature?.('display-capture') !== false;
+  const allows = policy?.allowsFeature?.('display-capture');
+  if (typeof allows === 'boolean') {
+    return allows;
+  }
+  return !isInIframe();
+}
+
+/** Whether this document is framed. A cross-origin parent makes `top` unreadable: framed. */
+function isInIframe(): boolean {
+  if (typeof window === 'undefined' || !window) {
+    return false;
+  }
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
 }
 
 /**
