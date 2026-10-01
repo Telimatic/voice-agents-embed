@@ -91,7 +91,9 @@ export default function Welcome() {
   }, [iframeEmbedUrl]);
 
   const playgroundEmbedCode = useMemo(() => {
-    return `<iframe\n  src="${playgroundUrl}"\n  style="width: 400px; height: 600px;"\n  allow="microphone"\n></iframe>`;
+    // TLZ-561: display-capture lets the caller share their screen with the agent, and
+    // screenshare=1 tells the page this embed code granted it (Firefox/Safari cannot ask).
+    return `<iframe\n  src="${playgroundUrl}&screenshare=1"\n  style="width: 400px; height: 600px;"\n  allow="microphone; display-capture"\n></iframe>`;
   }, [playgroundUrl]);
 
   const popupTestUrl = useMemo(() => {

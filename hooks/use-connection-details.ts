@@ -13,6 +13,8 @@ export interface UseConnectionDetailsOptions {
    * then let the agent ask for a screen nobody here can answer. Defaults to true.
    */
   screenshareUi?: boolean;
+  /** See CanCaptureDisplayOptions.framedCaptureGranted. Undefined keeps the original rule. */
+  framedCaptureGranted?: boolean;
 }
 
 export default function useConnectionDetails(
@@ -20,6 +22,7 @@ export default function useConnectionDetails(
   options: UseConnectionDetailsOptions = {}
 ) {
   const screenshareUi = options.screenshareUi ?? true;
+  const framedCaptureGranted = options.framedCaptureGranted;
 
   // Generate room connection details, including:
   //   - A random Room name
@@ -52,7 +55,7 @@ export default function useConnectionDetails(
           // A4: whether this browser can capture a display at all. Reported here and
           // stamped into the token server-side, because the participant itself has no
           // permission to write attributes — see createParticipantToken for why.
-          capable: screenshareUi && canCaptureDisplay(),
+          capable: screenshareUi && canCaptureDisplay({ framedCaptureGranted }),
           room_config: appConfig.agentName
             ? {
                 agents: [{ agent_name: appConfig.agentName }],
@@ -74,6 +77,7 @@ export default function useConnectionDetails(
     appConfig.sandboxId,
     appConfig.connectionDetailsEndpoint,
     screenshareUi,
+    framedCaptureGranted,
   ]);
 
   useEffect(() => {
