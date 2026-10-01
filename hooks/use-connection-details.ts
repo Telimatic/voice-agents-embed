@@ -6,7 +6,21 @@ import { AppConfig } from '@/lib/types';
 
 const ONE_MINUTE_IN_MILLISECONDS = 60 * 1000;
 
-export default function useConnectionDetails(appConfig: AppConfig) {
+export interface UseConnectionDetailsOptions {
+  /**
+   * TLZ-561. Whether this surface can actually run a screenshare (consent prompt, sharing
+   * banner). A surface that cannot must not report the browser as capable: the worker would
+   * then let the agent ask for a screen nobody here can answer. Defaults to true.
+   */
+  screenshareUi?: boolean;
+}
+
+export default function useConnectionDetails(
+  appConfig: AppConfig,
+  options: UseConnectionDetailsOptions = {}
+) {
+  const screenshareUi = options.screenshareUi ?? true;
+
   // Generate room connection details, including:
   //   - A random Room name
   //   - A random Participant name
@@ -38,7 +52,7 @@ export default function useConnectionDetails(appConfig: AppConfig) {
           // A4: whether this browser can capture a display at all. Reported here and
           // stamped into the token server-side, because the participant itself has no
           // permission to write attributes — see createParticipantToken for why.
-          capable: canCaptureDisplay(),
+          capable: screenshareUi && canCaptureDisplay(),
           room_config: appConfig.agentName
             ? {
                 agents: [{ agent_name: appConfig.agentName }],
@@ -59,6 +73,7 @@ export default function useConnectionDetails(appConfig: AppConfig) {
     appConfig.agentName,
     appConfig.sandboxId,
     appConfig.connectionDetailsEndpoint,
+    screenshareUi,
   ]);
 
   useEffect(() => {

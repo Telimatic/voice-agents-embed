@@ -21,7 +21,11 @@ interface AppProps {
 function EmbedAgentClient({ appConfig }: AppProps) {
   const room = useMemo(() => new Room(), []);
   const [sessionStarted, setSessionStarted] = useState(false);
-  const { connectionDetails, refreshConnectionDetails } = useConnectionDetails(appConfig);
+  // TLZ-561: the inline bar has no screenshare UI (and the customer's iframe usually does
+  // not grant display-capture), so it never reports this browser as able to share.
+  const { connectionDetails, refreshConnectionDetails } = useConnectionDetails(appConfig, {
+    screenshareUi: false,
+  });
 
   const [currentError, setCurrentError] = useState<EmbedErrorDetails | null>(null);
 
