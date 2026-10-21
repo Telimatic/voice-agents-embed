@@ -43,10 +43,10 @@ function decodeAttributes(token: string): Record<string, string> {
   return payload.attributes ?? {};
 }
 
-function postRequest(body: Record<string, unknown>): Request {
+function postRequest(body: Record<string, unknown>, headers: Record<string, string> = {}): Request {
   return new Request('http://localhost/api/connection-details', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -150,5 +150,35 @@ describe('capability attribute (A4) — minted, never client-written', () => {
       const { participantToken } = (await res.json()) as { participantToken: string };
       expect(decodeAttributes(participantToken)['telzino.screenshare.capable']).toBe('false');
     }
+  });
+});
+
+describe('client IP attribute (TLZ-706) — minted from Cloudflare, never from X-Forwarded-For', () => {
+  async function mintToken(headers: Record<string, string>): Promise<string> {
+    const res = await POST(postRequest({ agentId: 'agent-1' }, headers));
+    assertResponse(res);
+    return ((await res.json()) as { participantToken: string }).participantToken;
+  }
+
+  it('stamps telzino.client_ip from CF-Connecting-IP', async () => {
+    const participantToken = await mintToken({ 'cf-connecting-ip': '203.0.113.45' });
+
+    expect(decodeAttributes(participantToken)['telzino.client_ip']).toBe('203.0.113.45');
+    expect(decodeGrant(participantToken).canUpdateOwnMetadata).toBeFalsy();
+  });
+
+  it('stamps nothing from a spoofed X-Forwarded-For alone', async () => {
+    const participantToken = await mintToken({ 'x-forwarded-for': '1.1.1.1' });
+
+    expect(Object.keys(decodeAttributes(participantToken))).not.toContain('telzino.client_ip');
+  });
+
+  it("Cloudflare's address wins over a spoofed X-Forwarded-For", async () => {
+    const participantToken = await mintToken({
+      'cf-connecting-ip': '203.0.113.45',
+      'x-forwarded-for': '1.1.1.1',
+    });
+
+    expect(decodeAttributes(participantToken)['telzino.client_ip']).toBe('203.0.113.45');
   });
 });
