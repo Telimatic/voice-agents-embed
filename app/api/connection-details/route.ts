@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { AccessToken, type AccessTokenOptions, type VideoGrant } from 'livekit-server-sdk';
 import { RoomConfiguration, TrackSource } from '@livekit/protocol';
+import { ATTR_CLIENT_IP, clientIpFromHeaders } from '@/lib/client-ip';
 import { ATTR_CAPABLE } from '@/lib/screenshare-protocol';
 
 // NOTE: you are expected to define the following environment variables in `.env.local`:
@@ -41,6 +42,9 @@ export async function POST(req: Request) {
     // Reported by the client and stamped into the token below rather than written by the
     // participant after joining — see createParticipantToken.
     const capable: boolean = body?.capable === true;
+    // TLZ-706: the visitor's public IP, from Cloudflare's own header (lib/client-ip.ts).
+    // Stamped into the token like `capable`, so the browser cannot change it after joining.
+    const clientIp = clientIpFromHeaders(req.headers);
     const participantIdentity = `embed_user_${Date.now()}_${Math.floor(Math.random() * 10_000)}`;
 
     // Room name format: agent-{agentId}-{timestamp}
@@ -54,6 +58,7 @@ export async function POST(req: Request) {
       { identity: participantIdentity, name: participantName },
       roomName,
       capable,
+      clientIp,
       agentName
     );
 
@@ -95,6 +100,7 @@ function createParticipantToken(
   userInfo: AccessTokenOptions,
   roomName: string,
   capable: boolean,
+  clientIp: string | null,
   agentName?: string
 ): Promise<string> {
   const at = new AccessToken(API_KEY, API_SECRET, {
@@ -113,11 +119,15 @@ function createParticipantToken(
     // detection, caller-ID pre-auth, TeamMate webhooks and the NetSapiens PIN gate an
     // attacker-controlled number.
     //
-    // Minting the one attribute we actually need keeps the worker protocol identical (it
+    // Minting the attributes we actually need keeps the worker protocol identical (it
     // reads the attribute off the participant regardless of who set it) while leaving the
     // participant with no attribute-write permission at all. Deviates from spec §2.2,
     // which did not consider this vector.
-    attributes: { [ATTR_CAPABLE]: capable ? 'true' : 'false' },
+    attributes: {
+      [ATTR_CAPABLE]: capable ? 'true' : 'false',
+      // TLZ-706: only when an IP was found; the worker then records plain `web`.
+      ...(clientIp ? { [ATTR_CLIENT_IP]: clientIp } : {}),
+    },
   });
   const grant: VideoGrant = {
     room: roomName,
