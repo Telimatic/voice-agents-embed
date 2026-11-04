@@ -228,7 +228,7 @@ export function isDisplayPushPayload(p: unknown): p is DisplayPushPayload {
       Array.isArray(p.steps) &&
       p.steps.length >= 1 &&
       p.steps.length <= MAX_STEPS &&
-      p.steps.every(isNonEmptyStr)
+      p.steps.every((step) => isStr(step) && step.trim().length > 0)
     );
   }
   return (
@@ -239,9 +239,7 @@ export function isDisplayPushPayload(p: unknown): p is DisplayPushPayload {
 }
 
 export const isDisplayPushResponse = (p: unknown): p is DisplayPushResponse =>
-  ver(p) &&
-  typeof p.ok === 'boolean' &&
-  (p.error === undefined || oneOf(DISPLAY_PUSH_ERRORS, p.error));
+  ver(p) && typeof p.ok === 'boolean' && (p.error == null || oneOf(DISPLAY_PUSH_ERRORS, p.error));
 
 const isUnit = (x: unknown): x is number => typeof x === 'number' && x >= 0 && x <= 1;
 

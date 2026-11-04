@@ -125,6 +125,11 @@
         "w": 0.5,
         "h": 0.25
       }
+    },
+    "displayPushResponseNullError": {
+      "v": 1,
+      "ok": true,
+      "error": null
     }
   },
   "constants": {
@@ -225,6 +230,13 @@
         "kind": "steps",
         "title": "Reset router",
         "steps": ["ok", ""]
+      },
+      {
+        "v": 1,
+        "id": "d2",
+        "kind": "steps",
+        "title": "Reset router",
+        "steps": ["ok", "   "]
       }
     ],
     "displayPushResponse": [
