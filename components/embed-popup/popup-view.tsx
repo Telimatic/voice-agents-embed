@@ -81,6 +81,7 @@ export const PopupView = ({
   );
   const [chatOpen, setChatOpen] = useState(false);
   const [sharePending, setSharePending] = useState(false);
+  const [photoOpen, setPhotoOpen] = useState(false);
   const { messages, send } = useChatAndTranscription();
   // TLZ-561. One ended share, one `screenshare.notify`: the session hook reports a stop
   // exactly once, from its single unpublish listener, and this turns that report into the
@@ -357,6 +358,7 @@ export const PopupView = ({
               pending: sharePending,
               onPressedChange: handleShareToggle,
             }}
+            onSendPhoto={shareUnsupported && agentReady ? () => setPhotoOpen(true) : undefined}
             onSendMessage={onSendMessage}
             onChatOpenChange={setChatOpen}
           />
@@ -378,7 +380,9 @@ export const PopupView = ({
         <ParticipantStrip className={isScreenShareEnabled ? 'top-[4.5rem]' : 'top-2'} />
 
         {/* Photo fallback (TLZ-561, A4): only while an agent is there to receive it. */}
-        {shareUnsupported && agentReady && <PhotoFallback participant={localParticipant} />}
+        {photoOpen && shareUnsupported && agentReady && (
+          <PhotoFallback participant={localParticipant} onClose={() => setPhotoOpen(false)} />
+        )}
 
         {/* Screenshare consent (TLZ-561). Panel-filling: agreeing to share a screen is
             not a decision to make out of the corner of an eye. */}

@@ -9,11 +9,15 @@ import { PHOTO_MAX_BYTES, PHOTO_TOPIC } from '@/lib/screenshare-protocol';
  */
 export interface PhotoFallbackProps {
   /** The local participant (anything with `sendFile`). */
+  onClose: () => void;
   participant: { sendFile: (file: File, options?: { topic?: string }) => Promise<unknown> };
 }
 
-export function PhotoFallback({ participant }: PhotoFallbackProps) {
+export function PhotoFallback({ participant, onClose }: PhotoFallbackProps) {
   const [status, setStatus] = React.useState<{ kind: 'error' | 'sent'; text: string } | null>(null);
+
+  const closeTimer = React.useRef<ReturnType<typeof setTimeout>>(undefined);
+  React.useEffect(() => () => clearTimeout(closeTimer.current), []);
 
   async function onChange(event: React.ChangeEvent<HTMLInputElement>) {
     const input = event.target;
@@ -32,6 +36,7 @@ export function PhotoFallback({ participant }: PhotoFallbackProps) {
       try {
         await participant.sendFile(file, { topic: PHOTO_TOPIC });
         setStatus({ kind: 'sent', text: 'Photo sent.' });
+        closeTimer.current = setTimeout(onClose, 1500);
       } catch {
         setStatus({ kind: 'error', text: 'The photo could not be sent. Please try again.' });
       }
@@ -50,6 +55,9 @@ export function PhotoFallback({ participant }: PhotoFallbackProps) {
         <span className="sr-only">Choose a photo to send</span>
         <input type="file" accept="image/*" onChange={(e) => void onChange(e)} />
       </label>
+      <button type="button" onClick={onClose} className="mt-2 underline">
+        Close
+      </button>
       {status && (
         <p role={status.kind === 'error' ? 'alert' : 'status'} className="mt-2">
           {status.text}

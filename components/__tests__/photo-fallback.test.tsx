@@ -1,19 +1,67 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // eslint-disable-next-line import/named
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { ActionBar } from '@/components/embed-popup/action-bar';
 import { PhotoFallback } from '@/components/embed-popup/photo-fallback';
 import { PHOTO_MAX_BYTES, PHOTO_TOPIC } from '@/lib/screenshare-protocol';
 
 afterEach(cleanup);
 
 function setup(sendFile = vi.fn().mockResolvedValue({ id: 's1' })) {
-  render(<PhotoFallback participant={{ sendFile }} />);
+  const onClose = vi.fn();
+  render(<PhotoFallback participant={{ sendFile }} onClose={onClose} />);
   const input = screen.getByLabelText(/choose a photo/i) as HTMLInputElement;
   const pick = (file: File) => fireEvent.change(input, { target: { files: [file] } });
-  return { sendFile, input, pick };
+  return { sendFile, input, pick, onClose };
 }
 
+vi.mock('@livekit/components-react', () => ({
+  BarVisualizer: () => null,
+  useRemoteParticipants: () => [{ isAgent: true }],
+}));
+vi.mock('@/hooks/use-agent-control-bar', () => {
+  const t = { enabled: false, pending: false, toggle: () => {} };
+  return {
+    useAgentControlBar: () => ({
+      micTrackRef: undefined,
+      visibleControls: { microphone: false, camera: false, screenShare: true, chat: false },
+      cameraToggle: t,
+      microphoneToggle: t,
+      screenShareToggle: t,
+      handleAudioDeviceChange: () => {},
+      handleVideoDeviceChange: () => {},
+    }),
+  };
+});
+
+describe('ActionBar photo button', () => {
+  const caps = { supportsChatInput: false, supportsVideoInput: false, supportsScreenShare: false };
+  it('is absent when no photo handler is given (browser can share)', () => {
+    render(<ActionBar capabilities={caps} />);
+    expect(screen.queryByRole('button', { name: /send a photo/i })).toBeNull();
+  });
+  it('is present and fires when the browser cannot share', () => {
+    const onSendPhoto = vi.fn();
+    render(<ActionBar capabilities={caps} onSendPhoto={onSendPhoto} />);
+    fireEvent.click(screen.getByRole('button', { name: /send a photo/i }));
+    expect(onSendPhoto).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('PhotoFallback', () => {
+  it('closes via the close control', () => {
+    const { onClose } = setup();
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('closes itself shortly after a successful send', async () => {
+    const { pick, onClose } = setup();
+    pick(new File(['x'], 'a.png', { type: 'image/png' }));
+    await screen.findByText('Photo sent.');
+    await waitFor(() => expect(onClose).toHaveBeenCalled(), { timeout: 3000 });
+  });
+
   it('explains and offers an image-only, labelled file input', () => {
     const { input } = setup();
     expect(
