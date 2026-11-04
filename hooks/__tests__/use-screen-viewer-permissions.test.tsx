@@ -2,7 +2,8 @@ import type { ReactNode } from 'react';
 import { ParticipantKind, Room, RpcError, Track } from 'livekit-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RoomContext } from '@livekit/components-react';
-import { act, renderHook } from '@testing-library/react';
+// eslint-disable-next-line import/named
+import { act, renderHook, waitFor } from '@testing-library/react';
 import {
   type ScreenViewerPermissionsOptions,
   computePermissions,
@@ -12,6 +13,7 @@ import { useScreenshareSession } from '@/hooks/use-screenshare-session';
 import {
   ATTR_DISPLAY_NAME,
   ATTR_ROLE,
+  RPC_REQUEST_CONSENT,
   RPC_TAKEOVER_REQUEST_VIEWER_CONSENT,
   SCREENSHARE_PROTOCOL_VERSION,
   VIEWER_CONSENT_TIMEOUT_S,
@@ -110,6 +112,39 @@ describe('computePermissions (spec §6)', () => {
     ).toEqual([
       { participantIdentity: 'x', allowAll: true },
       { participantIdentity: 'human-agent-sip', allowAll: true },
+    ]);
+  });
+
+  it('a role on any kind but agent or SIP is staff (unknown kinds are restricted)', () => {
+    const noKind = { identity: 'n', attributes: { [ATTR_ROLE]: 'observer' } };
+    const agentWithRole = { ...agent, attributes: { [ATTR_ROLE]: 'rep' } };
+    expect(
+      computePermissions({
+        remotes: [noKind, agentWithRole],
+        localTracks: [MIC, SCREEN],
+        grantedIdentities: new Set(),
+        screenSid: 'TR_scr',
+      }).trackPermissions
+    ).toEqual([
+      { participantIdentity: 'n', allowedTrackSids: ['TR_mic'] },
+      { participantIdentity: 'agent-1', allowAll: true },
+    ]);
+  });
+
+  it('staff never get the camera, granted or not', () => {
+    const CAM = { trackSid: 'TR_cam', source: Track.Source.Camera };
+    const observer = { ...rep, identity: 'obs-1', attributes: { [ATTR_ROLE]: 'observer' } };
+    expect(
+      computePermissions({
+        remotes: [agent, rep, observer],
+        localTracks: [MIC, CAM, SCREEN],
+        grantedIdentities: new Set(['rep-1']),
+        screenSid: 'TR_scr',
+      }).trackPermissions
+    ).toEqual([
+      { participantIdentity: 'agent-1', allowAll: true },
+      { participantIdentity: 'rep-1', allowedTrackSids: ['TR_mic', 'TR_scr'] },
+      { participantIdentity: 'obs-1', allowedTrackSids: ['TR_mic'] },
     ]);
   });
 });
@@ -218,20 +253,20 @@ describe('useScreenViewerPermissions', () => {
     expect(lastCall(fake)?.[1]).toEqual([{ participantIdentity: 'rep-2', allowedTrackSids: [] }]);
   });
 
-  it('fails closed: a throw while a screen is live stops the share; with no screen it does not', () => {
+  it('a synchronous SDK throw while a screen is live asks for a stop; with no screen it does not', () => {
     const fake = createFakeRoom();
-    const onFailClosed = vi.fn();
+    const onRestrictionRefused = vi.fn();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    renderViewer(fake.room, { onFailClosed });
+    renderViewer(fake.room, { onRestrictionRefused });
     fake.setTrackSubscriptionPermissions.mockImplementation(() => {
       throw new Error('signal down');
     });
     act(() => fake.addParticipant(fakeAgent()));
-    expect(onFailClosed).not.toHaveBeenCalled();
+    expect(onRestrictionRefused).not.toHaveBeenCalled();
     act(() => {
       fake.publishScreen('TR_scr_1');
     });
-    expect(onFailClosed).toHaveBeenCalledTimes(1);
+    expect(onRestrictionRefused).toHaveBeenCalledTimes(1);
     errorSpy.mockRestore();
   });
 
@@ -420,6 +455,25 @@ describe('useScreenViewerPermissions', () => {
     expect(result.current.viewerConsentRequest).toBeNull();
   });
 
+  it('a repeat request for the same person joins the pending prompt instead of queueing', async () => {
+    const fake = roomWithAgent();
+    fake.publishScreen('TR_scr_1');
+    act(() => fake.addParticipant(fakeStaff('rep-1')));
+    const { result } = renderViewer(fake.room);
+    let first!: Promise<string>;
+    let second!: Promise<string>;
+    act(() => {
+      first = result.current.handleViewerConsent(request());
+    });
+    await act(async () => {
+      second = result.current.handleViewerConsent(request());
+    });
+    act(() => result.current.allowViewer());
+    expect(JSON.parse(await first).outcome).toBe('granted');
+    expect(JSON.parse(await second).outcome).toBe('granted');
+    expect(result.current.viewerConsentRequest).toBeNull();
+  });
+
   it('two requests queue: the second is shown after the first is answered', async () => {
     const fake = roomWithAgent();
     fake.publishScreen('TR_scr_1');
@@ -455,7 +509,7 @@ describe('useScreenshareSession wiring', () => {
     vi.unstubAllGlobals();
   });
 
-  it('fails closed: a permissions throw during a live share takes the screen down', async () => {
+  it('a synchronous permissions throw during a live share takes the screen down', async () => {
     stubNavigator({ capable: true });
     const fake = createFakeRoom();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -472,6 +526,99 @@ describe('useScreenshareSession wiring', () => {
     expect(fake.setScreenShareEnabled).toHaveBeenCalledWith(false);
     expect(fake.getTrackPublication()).toBeUndefined();
     errorSpy.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  /** Staff and agent present, share permitted: the moment the screen is requested. */
+  function sessionWithStaff() {
+    stubNavigator({ capable: true });
+    const fake = createFakeRoom();
+    fake.grantScreenShare();
+    fake.publishMic('TR_mic');
+    fake.addParticipant(fakeAgent('agent-1'));
+    fake.addParticipant(fakeStaff('rep-1'));
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <RoomContext.Provider value={fake.room as unknown as Room}>{children}</RoomContext.Provider>
+    );
+    const hook = renderHook(() => useScreenshareSession(), { wrapper });
+    return { fake, hook };
+  }
+
+  const RESTRICTED = [
+    false,
+    [
+      { participantIdentity: 'agent-1', allowAll: true },
+      { participantIdentity: 'rep-1', allowedTrackSids: ['TR_mic'] },
+    ],
+  ];
+
+  /** The restricted call must come strictly before the publish request. */
+  function expectRestrictedBeforePublish(fake: ReturnType<typeof createFakeRoom>) {
+    const publishOrder = fake.setScreenShareEnabled.mock.invocationCallOrder[0];
+    const calls = fake.setTrackSubscriptionPermissions.mock.calls;
+    const orders = fake.setTrackSubscriptionPermissions.mock.invocationCallOrder;
+    const lastBefore = calls.filter((_, i) => orders[i] < publishOrder).at(-1);
+    expect(fake.setScreenShareEnabled.mock.calls[0][0]).toBe(true);
+    expect(lastBefore).toEqual(RESTRICTED);
+  }
+
+  it('caller-initiated share: restricted before setScreenShareEnabled(true)', async () => {
+    const { fake, hook } = sessionWithStaff();
+    expect(lastCall(fake)).toEqual([true, []]);
+    await act(async () => {
+      await hook.result.current.startShare();
+    });
+    expectRestrictedBeforePublish(fake);
+    vi.unstubAllGlobals();
+  });
+
+  it('agent-requested share: restricted before setScreenShareEnabled(true)', async () => {
+    const { fake, hook } = sessionWithStaff();
+    const rpc = fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!({
+      requestId: 'r',
+      callerIdentity: 'agent-1',
+      payload: JSON.stringify({
+        v: SCREENSHARE_PROTOCOL_VERSION,
+        scope: ['browser', 'window', 'monitor'],
+        viewers: [{ role: 'agent' }],
+        timeout_seconds: 30,
+      }),
+      responseTimeout: 45_000,
+    });
+    await waitFor(() => expect(hook.result.current.consentRequest).not.toBeNull());
+    await act(async () => {
+      await hook.result.current.acceptConsent();
+    });
+    await rpc;
+    expectRestrictedBeforePublish(fake);
+    vi.unstubAllGlobals();
+  });
+
+  it('a picker that publishes nothing restores (true, [])', async () => {
+    const { fake, hook } = sessionWithStaff();
+    fake.setScreenShareEnabled.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('dismissed'), { name: 'NotAllowedError' });
+    });
+    await act(async () => {
+      await hook.result.current.startShare();
+    });
+    expect(lastCall(fake)).toEqual([true, []]);
+    vi.unstubAllGlobals();
+  });
+
+  it('if the restriction is refused synchronously, no picker opens', async () => {
+    const { fake, hook } = sessionWithStaff();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    fake.setTrackSubscriptionPermissions.mockImplementationOnce(() => {
+      throw new Error('refused');
+    });
+    let response!: { result: string };
+    await act(async () => {
+      response = await hook.result.current.startShare();
+    });
+    expect(response.result).toBe('failed');
+    expect(fake.setScreenShareEnabled).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 });

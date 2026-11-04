@@ -211,20 +211,26 @@ export function useScreenshareSession(
   // the worker widens the permission after the resolver approves the session, and the
   // SDK reports that as ParticipantPermissionsChanged, which this hook re-renders on.
   const { screenShare: enabled } = usePublishPermissions();
-  /** stopShare is defined below; the viewer hook's fail-closed path reaches it through this. */
+  /** stopShare is defined below; the viewer hook's refused-restriction path reaches it through this. */
   const stopShareRef = useRef<(reason: StopReason) => Promise<boolean>>(async () => false);
-  const { viewerConsentRequest, allowViewer, denyViewer, handleViewerConsent } =
-    useScreenViewerPermissions({
-      // StopReason has no "permissions failed"; the widget is stopping on the caller's behalf.
-      onFailClosed: () => {
-        void stopShareRef.current('caller_stop').then((stopped) => {
-          if (!stopped) {
-            // The same last resort acceptConsent uses: end the capture at the source.
-            room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.stop();
-          }
-        });
-      },
-    });
+  const {
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
+    handleViewerConsent,
+    restrictBeforeShare,
+    refreshPermissions,
+  } = useScreenViewerPermissions({
+    // StopReason has no "permissions failed"; the widget is stopping on the caller's behalf.
+    onRestrictionRefused: () => {
+      void stopShareRef.current('caller_stop').then((stopped) => {
+        if (!stopped) {
+          // The same last resort acceptConsent uses: end the capture at the source.
+          room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.stop();
+        }
+      });
+    },
+  });
 
   const [isSharing, setIsSharing] = useState(false);
   const [consentRequest, setConsentRequest] = useState<ConsentRequest | null>(null);
@@ -278,6 +284,9 @@ export function useScreenshareSession(
     async (allowedSurfaces: ShareSurface[]): Promise<RequestConsentResponse> => {
       const localParticipant = room.localParticipant;
       try {
+        // Staff already in the room must not be able to subscribe to the screen while it
+        // negotiates; a synchronous refusal lands in the catch and no picker opens.
+        restrictBeforeShare();
         const pub = await localParticipant.setScreenShareEnabled(true, {
           // Tab audio is never captured: the caller is already on a voice call and
           // publishing their tab's audio would echo it back into the room.
@@ -309,9 +318,12 @@ export function useScreenshareSession(
         // The caller dismissed the picker. That is a decision, not a fault.
         const result = name === 'NotAllowedError' ? 'cancelled' : 'failed';
         return { v: SCREENSHARE_PROTOCOL_VERSION, result, reason: name };
+      } finally {
+        // A picker that published nothing must not leave the room restricted.
+        refreshPermissions();
       }
     },
-    [room]
+    [refreshPermissions, restrictBeforeShare, room]
   );
 
   const stopShare = useCallback(

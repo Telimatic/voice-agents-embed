@@ -46,10 +46,14 @@ export interface TrackPermission {
   allowedTrackSids?: string[];
 }
 
-/** A human staff member joined through the dashboard (role minted into their token). */
+/**
+ * A human staff member (role minted into their token by the dashboard). Any kind other
+ * than the agent or the SIP leg counts, so an unexpected kind is restricted, not trusted.
+ */
 export function isStaffParticipant(participant: RemoteLike): boolean {
   return (
-    participant.kind === ParticipantKind.STANDARD &&
+    participant.kind !== ParticipantKind.AGENT &&
+    participant.kind !== ParticipantKind.SIP &&
     (VIEWER_ROLES as readonly string[]).includes(participant.attributes?.[ATTR_ROLE] ?? '')
   );
 }
@@ -78,11 +82,13 @@ export function computePermissions({
   if (!screenSid) {
     return { allParticipantsAllowed: true, trackPermissions: [] };
   }
-  const published = localTracks.filter((track) => track.trackSid);
-  const voiceOnly = published
-    .filter((track) => !SCREEN_SOURCES.includes(track.source))
-    .map((track) => track.trackSid);
-  const everything = published.map((track) => track.trackSid);
+  const sidsOf = (sources: readonly Track.Source[]) =>
+    localTracks
+      .filter((track) => track.trackSid && sources.includes(track.source))
+      .map((track) => track.trackSid);
+  // Staff hear the caller; they never get the camera, and the screen only once allowed.
+  const voiceOnly = sidsOf([Track.Source.Microphone]);
+  const voiceAndScreen = sidsOf([Track.Source.Microphone, ...SCREEN_SOURCES]);
   return {
     allParticipantsAllowed: false,
     trackPermissions: remotes.map((remote) =>
@@ -90,7 +96,7 @@ export function computePermissions({
         ? { participantIdentity: remote.identity, allowAll: true }
         : {
             participantIdentity: remote.identity,
-            allowedTrackSids: grantedIdentities.has(remote.identity) ? everything : voiceOnly,
+            allowedTrackSids: grantedIdentities.has(remote.identity) ? voiceAndScreen : voiceOnly,
           }
     ),
   };
@@ -108,7 +114,8 @@ type PendingViewer = {
   prompt: ViewerConsentPrompt;
   /** The share this request is about; a different (or no) share makes it moot. */
   screenSid: string;
-  resolve: (outcome: ViewerConsentOutcome) => void;
+  /** Everyone waiting on this answer: a repeat request for the same person joins it. */
+  waiters: ((outcome: ViewerConsentOutcome) => void)[];
   timer: ReturnType<typeof setTimeout>;
 };
 
@@ -117,21 +124,29 @@ export interface ScreenViewerPermissions {
   viewerConsentRequest: ViewerConsentPrompt | null;
   allowViewer: () => void;
   denyViewer: () => void;
+  /**
+   * Call immediately BEFORE asking the SDK to publish a screen: restricts staff to the
+   * microphone so the new screen sid is in no staff member's list while it negotiates.
+   * Throws if the SDK refuses synchronously; the share must then not start.
+   */
+  restrictBeforeShare: () => void;
+  /** Recompute from the room as it is now (e.g. after a picker that published nothing). */
+  refreshPermissions: () => void;
   /** The `takeover.requestViewerConsent` RPC handler; registered by the session hook. */
   handleViewerConsent: (data: RpcInvocationData) => Promise<string>;
 }
 
 export interface ScreenViewerPermissionsOptions {
-  /** Called when the restriction could not be applied while a screen is live: stop it. */
-  onFailClosed?: () => void;
+  /** The SDK refused the restriction synchronously while a screen is live: stop the share. */
+  onRestrictionRefused?: () => void;
 }
 
 export function useScreenViewerPermissions(
   options: ScreenViewerPermissionsOptions = {}
 ): ScreenViewerPermissions {
   const room = useRoomContext();
-  const onFailClosedRef = useRef(options.onFailClosed);
-  onFailClosedRef.current = options.onFailClosed;
+  const onRestrictionRefusedRef = useRef(options.onRestrictionRefused);
+  onRestrictionRefusedRef.current = options.onRestrictionRefused;
   const [viewerConsentRequest, setViewerConsentRequest] = useState<ViewerConsentPrompt | null>(
     null
   );
@@ -154,7 +169,7 @@ export function useScreenViewerPermissions(
     }
     queueRef.current.splice(index, 1);
     clearTimeout(entry.timer);
-    entry.resolve(outcome);
+    entry.waiters.forEach((resolve) => resolve(outcome));
     setViewerConsentRequest(queueRef.current[0]?.prompt ?? null);
   }, []);
 
@@ -179,10 +194,12 @@ export function useScreenViewerPermissions(
         trackPermissions
       );
     } catch (err) {
+      // Only a SYNCHRONOUS error lands here: the SDK stores the list and sends it
+      // fire-and-forget, and re-sends it itself after a reconnect. A screen whose
+      // restriction could not even be stored is not left live.
       console.error('[screenshare] could not update track subscription permissions', err);
-      // Fail closed: a screen nobody can restrict is a screen that must not stay live.
       if (screenSid) {
-        onFailClosedRef.current?.();
+        onRestrictionRefusedRef.current?.();
       }
     }
   }, [finish, room, screenSidNow]);
@@ -277,6 +294,14 @@ export function useScreenViewerPermissions(
       apply();
 
       const { identity, name, role } = payload.viewer;
+      const already = queueRef.current.find(
+        (entry) => entry.prompt.identity === identity && entry.screenSid === screenSid
+      );
+      if (already) {
+        return new Promise<string>((resolve) => {
+          already.waiters.push((outcome) => resolve(respond(outcome)));
+        });
+      }
       // The name the dashboard minted into the person's token is the one the caller sees.
       const shownName = viewer.attributes?.[ATTR_DISPLAY_NAME]?.trim() || name.trim();
       return new Promise<string>((resolve) => {
@@ -289,7 +314,7 @@ export function useScreenViewerPermissions(
             expiresAt: Date.now() + VIEWER_CONSENT_TIMEOUT_S * 1000,
           },
           screenSid,
-          resolve: (outcome) => resolve(respond(outcome)),
+          waiters: [(outcome) => resolve(respond(outcome))],
           timer: setTimeout(() => finish(entry, 'timeout'), VIEWER_CONSENT_TIMEOUT_S * 1000),
         };
         queueRef.current.push(entry);
@@ -299,8 +324,21 @@ export function useScreenViewerPermissions(
     [apply, finish, room, screenSidNow]
   );
 
+  const restrictBeforeShare = useCallback(() => {
+    const { allParticipantsAllowed, trackPermissions } = computePermissions({
+      remotes: Array.from(room.remoteParticipants.values()),
+      localTracks: Array.from(room.localParticipant.trackPublications.values()),
+      grantedIdentities: new Set(),
+      // Not a real sid: there is no screen yet, but the list must already be restricted.
+      screenSid: 'pre-publish',
+    });
+    room.localParticipant.setTrackSubscriptionPermissions(allParticipantsAllowed, trackPermissions);
+  }, [room]);
+
   return {
     viewerConsentRequest,
+    restrictBeforeShare,
+    refreshPermissions: apply,
     allowViewer: useCallback(() => answer(true), [answer]),
     denyViewer: useCallback(() => answer(false), [answer]),
     handleViewerConsent,

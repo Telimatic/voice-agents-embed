@@ -37,9 +37,12 @@ export function ViewerConsentOverlay({
     return () => clearInterval(interval);
   }, [expiresAt]);
 
-  // Focus moves into the prompt so it can be answered, and dismissed, from the keyboard.
+  // Focus moves into the prompt so it can be answered, and dismissed, from the keyboard,
+  // and goes back where it was when the prompt closes.
   useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
     panelRef.current?.focus();
+    return () => previous?.focus?.();
   }, []);
 
   const handleKeyDown = useCallback(
@@ -83,9 +86,12 @@ export function ViewerConsentOverlay({
         </Button>
       </div>
 
-      <p aria-live="polite" className="text-fg1/60 text-xs">
-        {`This request expires in ${remaining}s.`}
-      </p>
+      {/* The visible countdown is not live: a reader announcing every second drowns the
+          question. One polite warning at 10 s is announced instead. */}
+      <p className="text-fg1/60 text-xs">{`This request expires in ${remaining}s.`}</p>
+      <span className="sr-only" aria-live="polite">
+        {remaining > 0 && remaining <= 10 ? 'About 10 seconds left to answer.' : ''}
+      </span>
       <span className="sr-only">{`The request stands for ${timeoutSeconds} seconds.`}</span>
     </div>
   );
