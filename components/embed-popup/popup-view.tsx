@@ -14,6 +14,7 @@ import {
 import { ActionBar } from '@/components/embed-popup/action-bar';
 import { AudioVisualizer } from '@/components/embed-popup/audio-visualizer';
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
+import { ParticipantStrip } from '@/components/embed-popup/participant-strip';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
 import { Transcript } from '@/components/embed-popup/transcript';
 import useChatAndTranscription from '@/hooks/use-chat-and-transcription';
@@ -363,6 +364,9 @@ export const PopupView = ({
             }}
           />
         )}
+
+        {/* Team members in the call (TLZ-561). Below the sharing banner when both show. */}
+        <ParticipantStrip className={isScreenShareEnabled ? 'top-[4.5rem]' : 'top-2'} />
 
         {/* Screenshare consent (TLZ-561). Panel-filling: agreeing to share a screen is
             not a decision to make out of the corner of an eye. */}

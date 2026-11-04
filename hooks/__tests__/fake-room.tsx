@@ -1,6 +1,11 @@
 import { ParticipantEvent, ParticipantKind, RoomEvent, Track } from 'livekit-client';
 import { vi } from 'vitest';
-import { ATTR_ENABLED, SCREENSHARE_PROTOCOL_VERSION } from '@/lib/screenshare-protocol';
+import {
+  ATTR_DISPLAY_NAME,
+  ATTR_ENABLED,
+  ATTR_ROLE,
+  SCREENSHARE_PROTOCOL_VERSION,
+} from '@/lib/screenshare-protocol';
 
 /** What the widget passes to `localParticipant.performRpc`, typed so tests can read it. */
 export type PerformRpcArgs = {
@@ -69,6 +74,19 @@ export function fakeAgent(
 
 export function fakeHuman(identity = 'human-1'): FakeParticipant {
   return { identity, kind: ParticipantKind.STANDARD, attributes: {} };
+}
+
+/** A human team member whose token carries the role attribute; no name omits the name. */
+export function staffParticipant(
+  role: string,
+  name?: string,
+  identity = `${role}-${name ?? 'x'}`
+): FakeParticipant {
+  return {
+    identity,
+    kind: ParticipantKind.STANDARD,
+    attributes: { [ATTR_ROLE]: role, ...(name ? { [ATTR_DISPLAY_NAME]: name } : {}) },
+  };
 }
 
 export function createFakeRoom() {
