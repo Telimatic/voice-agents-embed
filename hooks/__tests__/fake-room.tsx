@@ -1,6 +1,6 @@
 import { ParticipantEvent, ParticipantKind, RoomEvent, Track } from 'livekit-client';
 import { vi } from 'vitest';
-import { ATTR_ENABLED, SCREENSHARE_PROTOCOL_VERSION } from '@/lib/screenshare-protocol';
+import { ATTR_ENABLED, ATTR_ROLE, SCREENSHARE_PROTOCOL_VERSION } from '@/lib/screenshare-protocol';
 
 /** What the widget passes to `localParticipant.performRpc`, typed so tests can read it. */
 export type PerformRpcArgs = {
@@ -71,11 +71,22 @@ export function fakeHuman(identity = 'human-1'): FakeParticipant {
   return { identity, kind: ParticipantKind.STANDARD, attributes: {} };
 }
 
+/** A rep or observer joined through the dashboard: a browser participant with `telzino.role`. */
+export function fakeStaff(identity = 'rep-1', role = 'rep'): FakeParticipant {
+  return { identity, kind: ParticipantKind.STANDARD, attributes: { [ATTR_ROLE]: role } };
+}
+
+/** The phone leg of a human transfer: a SIP participant, not staff. */
+export function fakeSip(identity = 'human-agent-sip'): FakeParticipant {
+  return { identity, kind: ParticipantKind.SIP, attributes: {} };
+}
+
 export function createFakeRoom() {
   const rpcHandlers = new Map<string, RpcHandler>();
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const remoteParticipants = new Map<string, FakeParticipant>();
   let published: ReturnType<typeof fakePublication> | undefined;
+  let mic: { trackSid: string; source: Track.Source } | undefined;
   const participantListeners = new Map<string, Set<(...args: unknown[]) => void>>();
   /** What the token granted. SCREEN_SHARE (3) is NOT in it: the worker adds it at runtime. */
   let permissions = {
@@ -98,6 +109,7 @@ export function createFakeRoom() {
     ): Promise<ReturnType<typeof fakePublication> | undefined> => {
       if (args[0]) {
         published = fakePublication('window');
+        room.emit(RoomEvent.LocalTrackPublished, published);
         return published;
       }
       const wasPublished = published;
@@ -109,6 +121,7 @@ export function createFakeRoom() {
     }
   );
   const getTrackPublication = vi.fn(() => published);
+  const setTrackSubscriptionPermissions = vi.fn();
   const setAttributes = vi.fn(async () => undefined);
   const performRpc = vi.fn(async (params: PerformRpcArgs) => {
     void params;
@@ -124,6 +137,13 @@ export function createFakeRoom() {
       setAttributes,
       getTrackPublication,
       performRpc,
+      setTrackSubscriptionPermissions,
+      /** Like the SDK's: every local publication, keyed by track sid. */
+      get trackPublications() {
+        return new Map(
+          [mic, published].filter((pub) => pub !== undefined).map((pub) => [pub!.trackSid, pub!])
+        );
+      },
       get permissions() {
         return permissions;
       },
@@ -166,6 +186,17 @@ export function createFakeRoom() {
     setAttributes,
     getTrackPublication,
     performRpc,
+    setTrackSubscriptionPermissions,
+    publishMic: (trackSid = 'TR_mic_1') => {
+      mic = { trackSid, source: Track.Source.Microphone };
+      room.emit(RoomEvent.LocalTrackPublished, mic);
+    },
+    /** A screen share the SDK has published, announced the way the SDK announces it. */
+    publishScreen: (trackSid = 'TR_screen_1') => {
+      published = fakePublication('window', trackSid);
+      room.emit(RoomEvent.LocalTrackPublished, published);
+      return published;
+    },
     /** Mirrors the SDK: once the picker resolves, the publication exists on the participant. */
     setPublished: (pub: ReturnType<typeof fakePublication> | undefined) => {
       published = pub;

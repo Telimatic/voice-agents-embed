@@ -11,6 +11,10 @@ import {
 import { useRoomContext } from '@livekit/components-react';
 import { usePublishPermissions } from '@/hooks/use-publish-permissions';
 import {
+  type ViewerConsentPrompt,
+  useScreenViewerPermissions,
+} from '@/hooks/use-screen-viewer-permissions';
+import {
   type AgentParticipantLike,
   agentCanReceiveShare,
   isAgentParticipant,
@@ -21,6 +25,7 @@ import {
   type ConsentResult,
   RPC_REQUEST_CONSENT,
   RPC_STOP,
+  RPC_TAKEOVER_REQUEST_VIEWER_CONSENT,
   type RequestConsentPayload,
   type RequestConsentResponse,
   SCREENSHARE_PROTOCOL_VERSION,
@@ -104,6 +109,10 @@ export interface ScreenshareSession {
    */
   canShare: boolean;
   consentRequest: ConsentRequest | null;
+  /** A team member the agent asks the caller to let see the screen (D6/D12), or null. */
+  viewerConsentRequest: ViewerConsentPrompt | null;
+  allowViewer: () => void;
+  denyViewer: () => void;
   acceptConsent: () => Promise<void>;
   declineConsent: () => void;
   startShare: () => Promise<RequestConsentResponse>;
@@ -202,6 +211,8 @@ export function useScreenshareSession(
   // the worker widens the permission after the resolver approves the session, and the
   // SDK reports that as ParticipantPermissionsChanged, which this hook re-renders on.
   const { screenShare: enabled } = usePublishPermissions();
+  const { viewerConsentRequest, allowViewer, denyViewer, handleViewerConsent } =
+    useScreenViewerPermissions();
 
   const [isSharing, setIsSharing] = useState(false);
   const [consentRequest, setConsentRequest] = useState<ConsentRequest | null>(null);
@@ -546,16 +557,18 @@ export function useScreenshareSession(
 
     register(RPC_REQUEST_CONSENT, handleRequestConsent);
     register(RPC_STOP, handleStop);
+    register(RPC_TAKEOVER_REQUEST_VIEWER_CONSENT, handleViewerConsent);
 
     return () => {
       try {
         room.unregisterRpcMethod(RPC_REQUEST_CONSENT);
         room.unregisterRpcMethod(RPC_STOP);
+        room.unregisterRpcMethod(RPC_TAKEOVER_REQUEST_VIEWER_CONSENT);
       } catch (err) {
         console.warn('[screenshare] could not unregister the RPC handlers', err);
       }
     };
-  }, [room, handleRequestConsent, handleStop]);
+  }, [room, handleRequestConsent, handleStop, handleViewerConsent]);
 
   // The browser's own "Stop sharing" bar ends the share without going through this hook.
   // Track publication state is the source of truth, and this is the only place a stop is
@@ -763,6 +776,9 @@ export function useScreenshareSession(
     // record at all.
     canShare: enabled && capable && agentReady,
     consentRequest,
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
     acceptConsent,
     declineConsent,
     startShare,

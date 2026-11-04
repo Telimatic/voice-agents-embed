@@ -16,6 +16,7 @@ import { AudioVisualizer } from '@/components/embed-popup/audio-visualizer';
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
 import { Transcript } from '@/components/embed-popup/transcript';
+import { ViewerConsentOverlay } from '@/components/embed-popup/viewer-consent-overlay';
 import useChatAndTranscription from '@/hooks/use-chat-and-transcription';
 import {
   useScreenshareCallerConsentNotifier,
@@ -90,8 +91,17 @@ export const PopupView = ({
   // TLZ-561. Owns the consent prompt and the screen track. Whether a share may be offered
   // is derived inside the hook from the live publish permission (widened by the worker at
   // runtime) and the agent's attributes, so nothing is threaded in from the token route.
-  const { canShare, consentRequest, acceptConsent, declineConsent, startShare, stopShare } =
-    useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
+  const {
+    canShare,
+    consentRequest,
+    acceptConsent,
+    declineConsent,
+    startShare,
+    stopShare,
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
+  } = useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
 
   const { supportsChatInput, supportsVideoInput } = appConfig;
   const capabilities = {
@@ -377,6 +387,18 @@ export const PopupView = ({
               void acceptConsent();
             }}
             onDecline={declineConsent}
+          />
+        )}
+
+        {/* TLZ-561 (D6/D12): may this team member see the screen already being shared? */}
+        {viewerConsentRequest && (
+          <ViewerConsentOverlay
+            key={viewerConsentRequest.expiresAt}
+            name={viewerConsentRequest.name}
+            timeoutSeconds={viewerConsentRequest.timeoutSeconds}
+            expiresAt={viewerConsentRequest.expiresAt}
+            onAllow={allowViewer}
+            onDeny={denyViewer}
           />
         )}
       </div>
