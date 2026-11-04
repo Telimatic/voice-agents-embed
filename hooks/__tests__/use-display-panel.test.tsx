@@ -150,6 +150,28 @@ describe('useDisplayPanel / ContentPanel', () => {
     expect(fake.rpcHandlers.size).toBe(0);
   });
 
+  it('refuses a push from the avatar worker (lk.publish_on_behalf)', async () => {
+    const { fake } = setup();
+    fake.remoteParticipants.set('avatar-1', {
+      ...fakeAgent('avatar-1'),
+      attributes: { 'lk.publish_on_behalf': 'agent-1' },
+    });
+    const out = await fake.rpcHandlers.get(RPC_DISPLAY_PUSH)!({
+      requestId: 'r',
+      callerIdentity: 'avatar-1',
+      payload: JSON.stringify({
+        v: V,
+        title: 'T',
+        id: 'a',
+        kind: 'url',
+        url: 'https://example.com/x',
+      }),
+      responseTimeout: 5000,
+    });
+    expect(JSON.parse(out).ok).toBe(false);
+    expect(screen.queryByTitle('T')).toBeNull();
+  });
+
   it('refuses push, highlight and clear from a non-agent participant and changes nothing', async () => {
     const { push, call } = setup();
     await push({ id: 's', kind: 'steps', steps: ['one', 'two'] });

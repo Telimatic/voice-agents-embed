@@ -478,6 +478,16 @@ export function useScreenshareSession(
       const respond = (response: RequestConsentResponse) => JSON.stringify(response);
       const payload = parsePayload(data?.payload);
 
+      // R39: only the Telzino agent may ask. Staff hold data permission and could otherwise
+      // put the agent's consent prompt in front of the caller themselves.
+      if (!isAgentParticipant(room.remoteParticipants.get(data?.callerIdentity ?? ''))) {
+        return respond({
+          v: SCREENSHARE_PROTOCOL_VERSION,
+          result: 'failed',
+          reason: 'not_permitted',
+        });
+      }
+
       if (!isCurrentVersion(payload)) {
         // A mismatched peer is refused rather than guessed at.
         return respond({
@@ -545,12 +555,19 @@ export function useScreenshareSession(
         });
       });
     },
-    [capable, settle]
+    [capable, room, settle]
   );
 
   // Agent -> widget: "stop sharing".
   const handleStop = useCallback(
     async (data: RpcInvocationData): Promise<string> => {
+      // R39: refused before anything is touched, so a non-agent cannot end the caller's share.
+      if (!isAgentParticipant(room.remoteParticipants.get(data?.callerIdentity ?? ''))) {
+        throw new RpcError(
+          RpcError.ErrorCode.APPLICATION_ERROR,
+          'screenshare.stop: caller is not the agent'
+        );
+      }
       const versionOk = isCurrentVersion(parsePayload(data?.payload));
 
       // A prompt still on screen means no share ever started. Close it and tell the agent
@@ -586,7 +603,7 @@ export function useScreenshareSession(
       const response: StopResponse = { v: SCREENSHARE_PROTOCOL_VERSION, stopped: true };
       return JSON.stringify(response);
     },
-    [settle, stopShare]
+    [room, settle, stopShare]
   );
 
   // A4: the capability attribute (ATTR_CAPABLE) used to be published from here via

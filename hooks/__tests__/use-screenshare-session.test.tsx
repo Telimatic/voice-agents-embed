@@ -385,6 +385,56 @@ describe('useScreenshareSession', () => {
     expect(fake.setScreenShareEnabled).not.toHaveBeenCalled();
   });
 
+  describe('R39: consent and stop are agent-only', () => {
+    const callAs = (fake: ReturnType<typeof createGrantedRoom>, method: string, who: string) =>
+      fake.rpcHandlers.get(method)!({
+        requestId: 'r',
+        callerIdentity: who,
+        payload:
+          method === RPC_STOP
+            ? JSON.stringify({ v: SCREENSHARE_PROTOCOL_VERSION })
+            : consentPayload(),
+        responseTimeout: 10_000,
+      });
+
+    it('refuses a rep, an avatar worker and an unknown caller, and touches nothing', async () => {
+      stubNavigator({ capable: true });
+      const fake = createGrantedRoom();
+      fake.addParticipant(fakeAgent());
+      fake.addParticipant(fakeHuman('rep-1'));
+      fake.addParticipant({
+        ...fakeAgent('avatar-1'),
+        attributes: { 'lk.publish_on_behalf': 'agent-1' },
+      });
+      const { result } = renderSession(fake.room);
+      await waitFor(() => expect(fake.rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
+
+      for (const who of ['rep-1', 'avatar-1', 'nobody']) {
+        const refused = JSON.parse(await callAs(fake, RPC_REQUEST_CONSENT, who));
+        expect(refused).toMatchObject({ result: 'failed', reason: 'not_permitted' });
+        await expect(callAs(fake, RPC_STOP, who)).rejects.toThrow('caller is not the agent');
+      }
+      expect(result.current.consentRequest).toBeNull();
+      expect(fake.setScreenShareEnabled).not.toHaveBeenCalled();
+    });
+
+    it('still serves the agent', async () => {
+      stubNavigator({ capable: true });
+      const fake = createGrantedRoom();
+      const agent = fakeAgent();
+      fake.addParticipant(agent);
+      const { result } = renderSession(fake.room);
+      await waitFor(() => expect(fake.rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
+      const rpc = callAs(fake, RPC_REQUEST_CONSENT, agent.identity);
+      await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
+      act(() => result.current.declineConsent());
+      expect(JSON.parse(await rpc).result).toBe('declined');
+      expect(JSON.parse(await callAs(fake, RPC_STOP, agent.identity))).toMatchObject({
+        stopped: true,
+      });
+    });
+  });
+
   it('startShare refuses before the permission and works after', async () => {
     stubNavigator({ capable: true });
     const fake = createFakeRoom();

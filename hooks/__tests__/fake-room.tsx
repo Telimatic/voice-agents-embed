@@ -176,7 +176,19 @@ export function createFakeRoom() {
       }),
     },
     registerRpcMethod: vi.fn((method: string, handler: RpcHandler) => {
-      rpcHandlers.set(method, handler);
+      // The legacy callers 'agent' / 'agent-1' stand for the Telzino agent. The agent-only
+      // guard (R39) reads the caller from the room, so it is present for the synchronous
+      // guard only; any other identity must be added by the test, or it is refused.
+      rpcHandlers.set(method, (data) => {
+        const legacy = data.callerIdentity === 'agent' || data.callerIdentity === 'agent-1';
+        if (!legacy || remoteParticipants.has(data.callerIdentity)) return handler(data);
+        remoteParticipants.set(data.callerIdentity, fakeAgent(data.callerIdentity));
+        try {
+          return handler(data);
+        } finally {
+          remoteParticipants.delete(data.callerIdentity);
+        }
+      });
     }),
     unregisterRpcMethod: vi.fn((method: string) => {
       rpcHandlers.delete(method);
