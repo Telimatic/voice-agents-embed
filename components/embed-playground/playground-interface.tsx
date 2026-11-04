@@ -20,6 +20,7 @@ import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
 import { ParticipantStrip } from '@/components/embed-popup/participant-strip';
 import { ContentPanel } from '@/components/embed-popup/content-panel';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
+import { ViewerConsentOverlay } from '@/components/embed-popup/viewer-consent-overlay';
 import {
   useScreenshareCallerConsentNotifier,
   useScreenshareStopNotifier,
@@ -57,8 +58,17 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
   const [sharePending, setSharePending] = useState(false);
   const notifyStopped = useScreenshareStopNotifier();
   const notifyCallerConsent = useScreenshareCallerConsentNotifier();
-  const { canShare, consentRequest, acceptConsent, declineConsent, startShare, stopShare } =
-    useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
+  const {
+    canShare,
+    consentRequest,
+    acceptConsent,
+    declineConsent,
+    startShare,
+    stopShare,
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
+  } = useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
 
   /** The one Stop path the page owns, shared by the banner and the share button. */
   const handleStopShare = useCallback(async () => {
@@ -263,6 +273,20 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
               void acceptConsent();
             }}
             onDecline={declineConsent}
+          />
+        </div>
+      )}
+
+      {/* TLZ-561 (D6/D12): may this team member see the screen already being shared? */}
+      {viewerConsentRequest && (
+        <div className="bg-embed-bg absolute inset-0 z-30 rounded-2xl">
+          <ViewerConsentOverlay
+            key={viewerConsentRequest.expiresAt}
+            name={viewerConsentRequest.name}
+            timeoutSeconds={viewerConsentRequest.timeoutSeconds}
+            expiresAt={viewerConsentRequest.expiresAt}
+            onAllow={allowViewer}
+            onDeny={denyViewer}
           />
         </div>
       )}

@@ -11,6 +11,10 @@ import {
 import { useRoomContext } from '@livekit/components-react';
 import { usePublishPermissions } from '@/hooks/use-publish-permissions';
 import {
+  type ViewerConsentPrompt,
+  useScreenViewerPermissions,
+} from '@/hooks/use-screen-viewer-permissions';
+import {
   type AgentParticipantLike,
   agentCanReceiveShare,
   isAgentParticipant,
@@ -21,6 +25,7 @@ import {
   type ConsentResult,
   RPC_REQUEST_CONSENT,
   RPC_STOP,
+  RPC_TAKEOVER_REQUEST_VIEWER_CONSENT,
   type RequestConsentPayload,
   type RequestConsentResponse,
   SCREENSHARE_PROTOCOL_VERSION,
@@ -108,6 +113,10 @@ export interface ScreenshareSession {
   /** Identity of the AI agent in the room, or null; the photo is addressed to it alone. */
   agentIdentity: string | null;
   consentRequest: ConsentRequest | null;
+  /** A team member the agent asks the caller to let see the screen (D6/D12), or null. */
+  viewerConsentRequest: ViewerConsentPrompt | null;
+  allowViewer: () => void;
+  denyViewer: () => void;
   acceptConsent: () => Promise<void>;
   declineConsent: () => void;
   startShare: () => Promise<RequestConsentResponse>;
@@ -206,6 +215,26 @@ export function useScreenshareSession(
   // the worker widens the permission after the resolver approves the session, and the
   // SDK reports that as ParticipantPermissionsChanged, which this hook re-renders on.
   const { screenShare: enabled } = usePublishPermissions();
+  /** stopShare is defined below; the viewer hook's refused-restriction path reaches it through this. */
+  const stopShareRef = useRef<(reason: StopReason) => Promise<boolean>>(async () => false);
+  const {
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
+    handleViewerConsent,
+    restrictBeforeShare,
+    shareStartEnded,
+  } = useScreenViewerPermissions({
+    // StopReason has no "permissions failed"; the widget is stopping on the caller's behalf.
+    onRestrictionRefused: () => {
+      void stopShareRef.current('caller_stop').then((stopped) => {
+        if (!stopped) {
+          // The same last resort acceptConsent uses: end the capture at the source.
+          room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.stop();
+        }
+      });
+    },
+  });
 
   const [isSharing, setIsSharing] = useState(false);
   const [consentRequest, setConsentRequest] = useState<ConsentRequest | null>(null);
@@ -259,6 +288,9 @@ export function useScreenshareSession(
     async (allowedSurfaces: ShareSurface[]): Promise<RequestConsentResponse> => {
       const localParticipant = room.localParticipant;
       try {
+        // Staff already in the room must not be able to subscribe to the screen while it
+        // negotiates; a synchronous refusal lands in the catch and no picker opens.
+        restrictBeforeShare();
         const pub = await localParticipant.setScreenShareEnabled(true, {
           // Tab audio is never captured: the caller is already on a voice call and
           // publishing their tab's audio would echo it back into the room.
@@ -290,9 +322,12 @@ export function useScreenshareSession(
         // The caller dismissed the picker. That is a decision, not a fault.
         const result = name === 'NotAllowedError' ? 'cancelled' : 'failed';
         return { v: SCREENSHARE_PROTOCOL_VERSION, result, reason: name };
+      } finally {
+        // Ends this start's pre-publish restriction; a published screen keeps its own.
+        shareStartEnded();
       }
     },
-    [room]
+    [shareStartEnded, restrictBeforeShare, room]
   );
 
   const stopShare = useCallback(
@@ -321,6 +356,7 @@ export function useScreenshareSession(
     },
     [room]
   );
+  stopShareRef.current = stopShare;
 
   /** Caller-initiated share, with no agent request outstanding. */
   const startShare = useCallback(async (): Promise<RequestConsentResponse> => {
@@ -550,16 +586,18 @@ export function useScreenshareSession(
 
     register(RPC_REQUEST_CONSENT, handleRequestConsent);
     register(RPC_STOP, handleStop);
+    register(RPC_TAKEOVER_REQUEST_VIEWER_CONSENT, handleViewerConsent);
 
     return () => {
       try {
         room.unregisterRpcMethod(RPC_REQUEST_CONSENT);
         room.unregisterRpcMethod(RPC_STOP);
+        room.unregisterRpcMethod(RPC_TAKEOVER_REQUEST_VIEWER_CONSENT);
       } catch (err) {
         console.warn('[screenshare] could not unregister the RPC handlers', err);
       }
     };
-  }, [room, handleRequestConsent, handleStop]);
+  }, [room, handleRequestConsent, handleStop, handleViewerConsent]);
 
   // The browser's own "Stop sharing" bar ends the share without going through this hook.
   // Track publication state is the source of truth, and this is the only place a stop is
@@ -770,6 +808,9 @@ export function useScreenshareSession(
     shareUnsupported: enabled && !capable,
     agentIdentity,
     consentRequest,
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
     acceptConsent,
     declineConsent,
     startShare,

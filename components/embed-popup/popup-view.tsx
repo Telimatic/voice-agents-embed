@@ -19,6 +19,7 @@ import { ParticipantStrip } from '@/components/embed-popup/participant-strip';
 import { PhotoFallback } from '@/components/embed-popup/photo-fallback';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
 import { Transcript } from '@/components/embed-popup/transcript';
+import { ViewerConsentOverlay } from '@/components/embed-popup/viewer-consent-overlay';
 import useChatAndTranscription from '@/hooks/use-chat-and-transcription';
 import {
   useScreenshareCallerConsentNotifier,
@@ -104,6 +105,9 @@ export const PopupView = ({
     declineConsent,
     startShare,
     stopShare,
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
   } = useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
 
   const { supportsChatInput, supportsVideoInput } = appConfig;
@@ -404,6 +408,18 @@ export const PopupView = ({
               void acceptConsent();
             }}
             onDecline={declineConsent}
+          />
+        )}
+
+        {/* TLZ-561 (D6/D12): may this team member see the screen already being shared? */}
+        {viewerConsentRequest && (
+          <ViewerConsentOverlay
+            key={viewerConsentRequest.expiresAt}
+            name={viewerConsentRequest.name}
+            timeoutSeconds={viewerConsentRequest.timeoutSeconds}
+            expiresAt={viewerConsentRequest.expiresAt}
+            onAllow={allowViewer}
+            onDeny={denyViewer}
           />
         )}
       </div>
