@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { ParticipantKind, RoomEvent } from 'livekit-client';
+import { RoomEvent } from 'livekit-client';
 import { useRoomContext } from '@livekit/components-react';
+import { isStaffParticipant } from '@/hooks/use-screen-viewer-permissions';
 import { ATTR_DISPLAY_NAME, ATTR_ROLE } from '@/lib/screenshare-protocol';
 
 export interface Staff {
@@ -12,8 +13,8 @@ const EMPTY: { reps: Staff[]; observers: Staff[] } = { reps: [], observers: [] }
 
 /**
  * TLZ-561 (D7/D12). Human team members in the call, by the role attribute the dashboard
- * mints into their token. Only STANDARD participants carrying a known role count: agents,
- * SIP callers and anything else are ignored.
+ * mints into their token. Same predicate as the viewer-permission gate (isStaffParticipant): a known
+ * role and not an AGENT or SIP participant.
  */
 export function useStaffParticipants() {
   const room = useRoomContext();
@@ -24,7 +25,7 @@ export function useStaffParticipants() {
       const reps: Staff[] = [];
       const observers: Staff[] = [];
       room.remoteParticipants.forEach((p) => {
-        if (p.kind !== ParticipantKind.STANDARD) return;
+        if (!isStaffParticipant(p)) return;
         const role = p.attributes?.[ATTR_ROLE];
         const entry = {
           identity: p.identity,

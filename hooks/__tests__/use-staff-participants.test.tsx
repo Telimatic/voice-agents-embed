@@ -36,6 +36,15 @@ describe('useStaffParticipants', () => {
     expect(result.current.reps[0].name).toBe('Team member');
   });
 
+  it('counts staff whose kind is undefined, same as the permission gate', () => {
+    const fake = createFakeRoom();
+    const { result } = renderHook(() => useStaffParticipants(), { wrapper: wrap(fake) });
+    act(() =>
+      fake.addParticipant({ identity: 'rep-k', attributes: { 'telzino.role': 'rep' } } as never)
+    );
+    expect(result.current.reps).toHaveLength(1);
+  });
+
   it('ignores a non-standard participant carrying the role attribute', () => {
     const fake = createFakeRoom();
     const { result } = renderHook(() => useStaffParticipants(), { wrapper: wrap(fake) });
