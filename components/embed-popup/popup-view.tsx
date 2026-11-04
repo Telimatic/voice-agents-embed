@@ -97,6 +97,7 @@ export const PopupView = ({
     canShare,
     shareUnsupported,
     agentReady,
+    agentIdentity,
     consentRequest,
     acceptConsent,
     declineConsent,
@@ -381,7 +382,11 @@ export const PopupView = ({
 
         {/* Photo fallback (TLZ-561, A4): only while an agent is there to receive it. */}
         {photoOpen && shareUnsupported && agentReady && (
-          <PhotoFallback participant={localParticipant} onClose={() => setPhotoOpen(false)} />
+          <PhotoFallback
+            participant={localParticipant}
+            agentIdentity={agentIdentity}
+            onClose={() => setPhotoOpen(false)}
+          />
         )}
 
         {/* Screenshare consent (TLZ-561). Panel-filling: agreeing to share a screen is

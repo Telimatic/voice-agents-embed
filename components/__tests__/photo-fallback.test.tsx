@@ -7,9 +7,12 @@ import { PHOTO_MAX_BYTES, PHOTO_TOPIC } from '@/lib/screenshare-protocol';
 
 afterEach(cleanup);
 
-function setup(sendFile = vi.fn().mockResolvedValue({ id: 's1' })) {
+function setup(
+  sendFile = vi.fn().mockResolvedValue({ id: 's1' }),
+  agent: string | null = 'agent-1'
+) {
   const onClose = vi.fn();
-  render(<PhotoFallback participant={{ sendFile }} onClose={onClose} />);
+  render(<PhotoFallback participant={{ sendFile }} agentIdentity={agent} onClose={onClose} />);
   const input = screen.getByLabelText(/choose a photo/i) as HTMLInputElement;
   const pick = (file: File) => fireEvent.change(input, { target: { files: [file] } });
   return { sendFile, input, pick, onClose };
@@ -48,6 +51,36 @@ describe('ActionBar photo button', () => {
   });
 });
 
+describe('PhotoFallback addressing and in-flight', () => {
+  it('does not send, and shows an error, when no agent identity is known', () => {
+    const { sendFile, pick } = setup(undefined, null);
+    pick(new File(['x'], 'a.png', { type: 'image/png' }));
+    expect(sendFile).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/not available/i);
+  });
+
+  it('ignores picks and disables the input while a send is in flight', async () => {
+    let resolve!: () => void;
+    const sendFile = vi.fn(() => new Promise<void>((r) => (resolve = r)));
+    const { input, pick } = setup(sendFile);
+    pick(new File(['x'], 'a.png', { type: 'image/png' }));
+    await waitFor(() => expect(input).toBeDisabled());
+    pick(new File(['y'], 'b.png', { type: 'image/png' }));
+    expect(sendFile).toHaveBeenCalledTimes(1);
+    resolve();
+    await waitFor(() => expect(input).not.toBeDisabled());
+  });
+
+  it('clears the previous error when a new file is picked', async () => {
+    const { pick } = setup();
+    pick(new File(['x'], 'a.pdf', { type: 'application/pdf' }));
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    pick(new File(['x'], 'a.png', { type: 'image/png' }));
+    await screen.findByText('Photo sent.');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
 describe('PhotoFallback', () => {
   it('closes via the close control', () => {
     const { onClose } = setup();
@@ -77,7 +110,12 @@ describe('PhotoFallback', () => {
     const { sendFile, pick } = setup();
     const file = new File(['x'], 'a.png', { type: 'image/png' });
     pick(file);
-    await waitFor(() => expect(sendFile).toHaveBeenCalledWith(file, { topic: PHOTO_TOPIC }));
+    await waitFor(() =>
+      expect(sendFile).toHaveBeenCalledWith(file, {
+        topic: PHOTO_TOPIC,
+        destinationIdentities: ['agent-1'],
+      })
+    );
     expect(PHOTO_TOPIC).toBe('telzino.photo');
     expect(await screen.findByText('Photo sent.')).toBeInTheDocument();
   });

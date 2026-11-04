@@ -105,6 +105,8 @@ export interface ScreenshareSession {
   canShare: boolean;
   /** Screen sharing is permitted but this browser cannot capture; offer a photo instead. */
   shareUnsupported: boolean;
+  /** Identity of the AI agent in the room, or null; the photo is addressed to it alone. */
+  agentIdentity: string | null;
   consentRequest: ConsentRequest | null;
   acceptConsent: () => Promise<void>;
   declineConsent: () => void;
@@ -199,7 +201,7 @@ export function useScreenshareSession(
   const room = useRoomContext();
   // Evaluated once per session: the browser cannot grow the ability mid-call.
   const capable = useMemo(() => canCaptureDisplay(), []);
-  const { agentReady, allowedSurfaces } = useScreenshareAgent();
+  const { agentReady, agentIdentity, allowedSurfaces } = useScreenshareAgent();
   // Whether THIS participant may publish a screen right now. The token never grants it;
   // the worker widens the permission after the resolver approves the session, and the
   // SDK reports that as ParticipantPermissionsChanged, which this hook re-renders on.
@@ -766,6 +768,7 @@ export function useScreenshareSession(
     canShare: enabled && capable && agentReady,
     // The agent may use screen sharing but this browser cannot: the widget offers a photo.
     shareUnsupported: enabled && !capable,
+    agentIdentity,
     consentRequest,
     acceptConsent,
     declineConsent,
