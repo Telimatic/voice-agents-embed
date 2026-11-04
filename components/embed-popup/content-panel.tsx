@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import { useRoomContext } from '@livekit/components-react';
 import { Button } from '@/components/ui/button';
 import { type PanelHighlight, useDisplayPanel } from '@/hooks/use-display-panel';
@@ -8,6 +9,15 @@ import { cn } from '@/lib/utils';
 
 /** Agent-supplied pages may run scripts and forms but cannot navigate the host page. */
 export const PANEL_IFRAME_SANDBOX = 'allow-scripts allow-forms allow-same-origin allow-popups';
+
+/** Framing our own origin with allow-scripts + allow-same-origin would escape the sandbox. */
+function isSameOrigin(url: string) {
+  try {
+    return new URL(url, window.location.origin).origin === window.location.origin;
+  } catch {
+    return true;
+  }
+}
 
 function NewTabLink({ url }: { url: string }) {
   return (
@@ -37,12 +47,14 @@ function Body({
     case 'pdf':
       return (
         <>
-          <iframe
-            src={url}
-            title={item.title}
-            sandbox={PANEL_IFRAME_SANDBOX}
-            className="bg-bg1 min-h-0 w-full flex-1 rounded-lg border-0"
-          />
+          {!isSameOrigin(url) && (
+            <iframe
+              src={url}
+              title={item.title}
+              sandbox={PANEL_IFRAME_SANDBOX}
+              className="bg-bg1 min-h-0 w-full flex-1 rounded-lg border-0"
+            />
+          )}
           <NewTabLink url={url} />
         </>
       );
@@ -109,6 +121,11 @@ export function ContentPanel({ className }: { className?: string }) {
   const room = useRoomContext();
   const { item, highlight, mode, last, close, minimize, reopen, paymentOpened } =
     useDisplayPanel(room);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const openId = item && mode === 'open' ? item.id : null;
+  useEffect(() => {
+    if (openId) headingRef.current?.focus();
+  }, [openId]);
 
   if (item && mode === 'open') {
     return (
@@ -116,13 +133,22 @@ export function ContentPanel({ className }: { className?: string }) {
         role="dialog"
         aria-label={item.title || 'Shared content'}
         data-testid="display-panel"
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') close();
+        }}
         className={cn(
           'bg-background border-separator1 dark:border-separator2 absolute inset-x-2 bottom-16 z-20 flex max-h-[70%] flex-col gap-2 rounded-2xl border p-3 drop-shadow-lg',
           className
         )}
       >
         <header className="flex items-center gap-2">
-          <h2 className="text-fg1 min-w-0 flex-1 truncate text-sm font-semibold">{item.title}</h2>
+          <h2
+            ref={headingRef}
+            tabIndex={-1}
+            className="text-fg1 min-w-0 flex-1 truncate text-sm font-semibold outline-none"
+          >
+            {item.title}
+          </h2>
           <Button type="button" size="sm" variant="ghost" onClick={minimize}>
             Minimize
           </Button>

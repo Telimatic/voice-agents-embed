@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type Room, RoomEvent, type RpcInvocationData } from 'livekit-client';
+import { isAgentParticipant } from '@/hooks/use-screenshare-peer';
 import {
   type DisplayHighlightPayload,
   type DisplayNotifyEvent,
@@ -75,7 +76,12 @@ export function useDisplayPanel(room: Room | undefined) {
   useEffect(() => {
     if (!room) return;
 
+    // Only the AI agent may drive the panel; a rep or any other participant is refused.
+    const fromAgent = (data: RpcInvocationData) =>
+      isAgentParticipant(room.remoteParticipants.get(data.callerIdentity));
+
     const onPush = async (data: RpcInvocationData) => {
+      if (!fromAgent(data)) return BAD();
       const payload = parse(data.payload);
       if (!isDisplayPushPayload(payload)) return BAD();
       agentRef.current = data.callerIdentity;
@@ -85,6 +91,7 @@ export function useDisplayPanel(room: Room | undefined) {
     };
 
     const onHighlight = async (data: RpcInvocationData) => {
+      if (!fromAgent(data)) return BAD();
       const payload = parse(data.payload);
       if (!isDisplayHighlightPayload(payload)) return BAD();
       const { item } = ref.current;
@@ -99,6 +106,7 @@ export function useDisplayPanel(room: Room | undefined) {
     };
 
     const onClear = async (data: RpcInvocationData) => {
+      if (!fromAgent(data)) return BAD();
       if (!isDisplayClearPayload(parse(data.payload))) return BAD();
       update({ ...ref.current, item: null, highlight: null, mode: 'closed' });
       return reply({ ok: true });
@@ -118,7 +126,10 @@ export function useDisplayPanel(room: Room | undefined) {
         console.warn(`[display] could not register ${method}`, err);
       }
     }
-    const onDisconnected = () => update(EMPTY);
+    const onDisconnected = () => {
+      agentRef.current = undefined;
+      update(EMPTY);
+    };
     room.on(RoomEvent.Disconnected, onDisconnected);
 
     return () => {

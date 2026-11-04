@@ -1,5 +1,5 @@
 import { Room } from 'livekit-client';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RoomContext } from '@livekit/components-react';
 // eslint-disable-next-line import/named
 import { act, fireEvent, render, screen } from '@testing-library/react';
@@ -11,21 +11,27 @@ import {
   RPC_DISPLAY_PUSH,
   SCREENSHARE_PROTOCOL_VERSION as V,
 } from '@/lib/screenshare-protocol';
-import { createFakeRoom } from './fake-room';
+import { createFakeRoom, fakeAgent, fakeHuman } from './fake-room';
 
 function setup() {
   const fake = createFakeRoom();
+  fake.remoteParticipants.set('agent-1', fakeAgent('agent-1'));
+  fake.remoteParticipants.set('rep-1', fakeHuman('rep-1'));
   render(
     <RoomContext.Provider value={fake.room as unknown as Room}>
       <ContentPanel />
     </RoomContext.Provider>
   );
-  const call = async (method: string, body: Record<string, unknown> | string) => {
+  const call = async (
+    method: string,
+    body: Record<string, unknown> | string,
+    callerIdentity = 'agent-1'
+  ) => {
     let out = '';
     await act(async () => {
       out = await fake.rpcHandlers.get(method)!({
         requestId: 'r',
-        callerIdentity: 'agent-1',
+        callerIdentity,
         payload: typeof body === 'string' ? body : JSON.stringify({ v: V, ...body }),
         responseTimeout: 5000,
       });
@@ -142,5 +148,41 @@ describe('useDisplayPanel / ContentPanel', () => {
     expect(fake.rpcHandlers.size).toBe(3);
     unmount();
     expect(fake.rpcHandlers.size).toBe(0);
+  });
+
+  it('refuses push, highlight and clear from a non-agent participant and changes nothing', async () => {
+    const { push, call } = setup();
+    await push({ id: 's', kind: 'steps', steps: ['one', 'two'] });
+    const refused = async (m: string, b: Record<string, unknown>, who: string) =>
+      expect(await call(m, b, who)).toEqual({ v: V, ok: false, error: 'bad_payload' });
+    await refused(
+      RPC_DISPLAY_PUSH,
+      { id: 'x', kind: 'url', title: 'X', url: 'https://e.com' },
+      'rep-1'
+    );
+    await refused(RPC_DISPLAY_HIGHLIGHT, { id: 's', step: 0 }, 'rep-1');
+    await refused(RPC_DISPLAY_CLEAR, {}, 'rep-1');
+    await refused(RPC_DISPLAY_CLEAR, {}, 'unknown');
+    expect(screen.getByText('two')).toBeTruthy();
+    expect(document.querySelectorAll('[data-highlighted="true"]')).toHaveLength(0);
+    expect(screen.getByTestId('display-panel')).toBeTruthy();
+  });
+
+  it('does not iframe a same-origin url, only offers the new-tab link', async () => {
+    const { push } = setup();
+    vi.stubGlobal('location', { origin: 'https://app.example' });
+    await push({ id: 'a', kind: 'url', url: 'https://app.example/x' });
+    vi.unstubAllGlobals();
+    expect(document.querySelector('iframe')).toBeNull();
+    expect(screen.getByText('Open in new tab')).toBeTruthy();
+  });
+
+  it('Escape dismisses with a notify and focus lands on the heading when opened', async () => {
+    const { push, notified } = setup();
+    await push({ id: 'a', kind: 'url', url: 'https://example.com/x' });
+    expect(document.activeElement?.tagName).toBe('H2');
+    fireEvent.keyDown(screen.getByTestId('display-panel'), { key: 'Escape' });
+    expect(screen.queryByTestId('display-panel')).toBeNull();
+    expect(notified()).toEqual(['dismissed']);
   });
 });
