@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RoomContext } from '@livekit/components-react';
 import { act, renderHook } from '@testing-library/react';
 import {
+  type ScreenViewerPermissionsOptions,
   computePermissions,
   useScreenViewerPermissions,
 } from '@/hooks/use-screen-viewer-permissions';
@@ -36,7 +37,18 @@ const rep = {
 };
 
 describe('computePermissions (spec §6)', () => {
-  it('no staff present: exactly today’s behaviour', () => {
+  it('no screen published: exactly today’s behaviour, staff or not', () => {
+    expect(
+      computePermissions({
+        remotes: [agent, sip, rep],
+        localTracks: [MIC],
+        grantedIdentities: new Set(['rep-1']),
+        screenSid: null,
+      })
+    ).toEqual({ allParticipantsAllowed: true, trackPermissions: [] });
+  });
+
+  it('share live, no staff: still restricted, agent and SIP get everything (R19)', () => {
     expect(
       computePermissions({
         remotes: [agent, sip],
@@ -44,7 +56,13 @@ describe('computePermissions (spec §6)', () => {
         grantedIdentities: new Set(),
         screenSid: 'TR_scr',
       })
-    ).toEqual({ allParticipantsAllowed: true, trackPermissions: [] });
+    ).toEqual({
+      allParticipantsAllowed: false,
+      trackPermissions: [
+        { participantIdentity: 'agent-1', allowAll: true },
+        { participantIdentity: 'human-agent-sip', allowAll: true },
+      ],
+    });
   });
 
   it('staff present, not granted: staff hears the caller only; agent and SIP get everything', () => {
@@ -79,18 +97,6 @@ describe('computePermissions (spec §6)', () => {
     ]);
   });
 
-  it('a grant with no live screen opens nothing extra', () => {
-    const { trackPermissions } = computePermissions({
-      remotes: [rep],
-      localTracks: [MIC],
-      grantedIdentities: new Set(['rep-1']),
-      screenSid: null,
-    });
-    expect(trackPermissions).toEqual([
-      { participantIdentity: 'rep-1', allowedTrackSids: ['TR_mic'] },
-    ]);
-  });
-
   it('a STANDARD participant with an unknown role, or a role on a non-browser kind, is not staff', () => {
     const odd = { ...rep, identity: 'x', attributes: { [ATTR_ROLE]: 'admin' } };
     const sipWithRole = { ...sip, attributes: { [ATTR_ROLE]: 'rep' } };
@@ -100,16 +106,19 @@ describe('computePermissions (spec §6)', () => {
         localTracks: [MIC, SCREEN],
         grantedIdentities: new Set(),
         screenSid: 'TR_scr',
-      })
-    ).toEqual({ allParticipantsAllowed: true, trackPermissions: [] });
+      }).trackPermissions
+    ).toEqual([
+      { participantIdentity: 'x', allowAll: true },
+      { participantIdentity: 'human-agent-sip', allowAll: true },
+    ]);
   });
 });
 
-function renderViewer(room: FakeRoom) {
+function renderViewer(room: FakeRoom, options: ScreenViewerPermissionsOptions = {}) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <RoomContext.Provider value={room as unknown as Room}>{children}</RoomContext.Provider>
   );
-  return renderHook(() => useScreenViewerPermissions(), { wrapper });
+  return renderHook(() => useScreenViewerPermissions(options), { wrapper });
 }
 
 function request(identity = 'rep-1', name = 'Dana') {
@@ -142,7 +151,7 @@ describe('useScreenViewerPermissions', () => {
     vi.useRealTimers();
   });
 
-  it('applies (true, []) on mount and on every participant connect/disconnect without staff', () => {
+  it('applies (true, []) on mount and on every participant connect/disconnect with no share', () => {
     const fake = createFakeRoom();
     renderViewer(fake.room);
     expect(fake.setTrackSubscriptionPermissions).toHaveBeenCalledTimes(1);
@@ -150,23 +159,39 @@ describe('useScreenViewerPermissions', () => {
 
     act(() => fake.addParticipant(fakeAgent()));
     act(() => fake.addParticipant(fakeSip()));
-    const human = fakeHuman();
-    act(() => fake.addParticipant(human));
-    act(() => fake.removeParticipant(human));
+    const staff = fakeStaff();
+    act(() => fake.addParticipant(staff));
+    act(() => fake.removeParticipant(staff));
     expect(fake.setTrackSubscriptionPermissions).toHaveBeenCalledTimes(5);
     fake.setTrackSubscriptionPermissions.mock.calls.forEach((call) =>
       expect(call).toEqual([true, []])
     );
   });
 
-  it('restricts staff on connect, recomputes on publish, and lifts it when staff leave', () => {
+  it('restricts from the moment the screen is published until it is unpublished', () => {
     const fake = createFakeRoom();
     fake.publishMic('TR_mic');
     act(() => fake.addParticipant(fakeAgent()));
     renderViewer(fake.room);
+    expect(lastCall(fake)).toEqual([true, []]);
 
-    const staff = fakeStaff('rep-1');
-    act(() => fake.addParticipant(staff));
+    act(() => {
+      fake.publishScreen('TR_scr_1');
+    });
+    expect(lastCall(fake)).toEqual([false, [{ participantIdentity: 'agent-1', allowAll: true }]]);
+
+    act(() => fake.stopFromBrowserBar());
+    expect(lastCall(fake)).toEqual([true, []]);
+  });
+
+  it('staff joining mid-share is never in an allowAll entry and never gets the screen', () => {
+    const fake = createFakeRoom();
+    fake.publishMic('TR_mic');
+    fake.publishScreen('TR_scr_1');
+    act(() => fake.addParticipant(fakeAgent()));
+    renderViewer(fake.room);
+
+    act(() => fake.addParticipant(fakeStaff('rep-1')));
     expect(lastCall(fake)).toEqual([
       false,
       [
@@ -174,28 +199,66 @@ describe('useScreenViewerPermissions', () => {
         { participantIdentity: 'rep-1', allowedTrackSids: ['TR_mic'] },
       ],
     ]);
+    fake.setTrackSubscriptionPermissions.mock.calls.forEach(([all, perms]) => {
+      expect(all).toBe(false);
+      expect(perms).not.toContainEqual(
+        expect.objectContaining({ participantIdentity: 'rep-1', allowAll: true })
+      );
+    });
+  });
 
+  it('recomputes when a participant role attribute arrives after connect', () => {
+    const fake = createFakeRoom();
+    fake.publishScreen('TR_scr_1');
+    renderViewer(fake.room);
+    const late = fakeHuman('rep-2');
+    act(() => fake.addParticipant(late));
+    expect(lastCall(fake)?.[1]).toEqual([{ participantIdentity: 'rep-2', allowAll: true }]);
+    act(() => fake.setParticipantAttributes(late, { [ATTR_ROLE]: 'observer' }));
+    expect(lastCall(fake)?.[1]).toEqual([{ participantIdentity: 'rep-2', allowedTrackSids: [] }]);
+  });
+
+  it('fails closed: a throw while a screen is live stops the share; with no screen it does not', () => {
+    const fake = createFakeRoom();
+    const onFailClosed = vi.fn();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderViewer(fake.room, { onFailClosed });
+    fake.setTrackSubscriptionPermissions.mockImplementation(() => {
+      throw new Error('signal down');
+    });
+    act(() => fake.addParticipant(fakeAgent()));
+    expect(onFailClosed).not.toHaveBeenCalled();
     act(() => {
       fake.publishScreen('TR_scr_1');
     });
-    // The new screen track is NOT given to the staff member.
+    expect(onFailClosed).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
+  });
+
+  it('a granted staff member who leaves and rejoins mid-share must be asked again', async () => {
+    const fake = roomWithAgent();
+    fake.publishMic('TR_mic');
+    fake.publishScreen('TR_scr_1');
+    const staff = fakeStaff('rep-1');
+    act(() => fake.addParticipant(staff));
+    const { result } = renderViewer(fake.room);
+    let pending!: Promise<string>;
+    act(() => {
+      pending = result.current.handleViewerConsent(request());
+    });
+    act(() => result.current.allowViewer());
+    await pending;
+    expect(lastCall(fake)?.[1]).toContainEqual({
+      participantIdentity: 'rep-1',
+      allowedTrackSids: ['TR_mic', 'TR_scr_1'],
+    });
+
+    act(() => fake.removeParticipant(staff));
+    act(() => fake.addParticipant(fakeStaff('rep-1')));
     expect(lastCall(fake)?.[1]).toContainEqual({
       participantIdentity: 'rep-1',
       allowedTrackSids: ['TR_mic'],
     });
-
-    act(() => fake.removeParticipant(staff));
-    expect(lastCall(fake)).toEqual([true, []]);
-  });
-
-  it('recomputes when a participant’s role attribute arrives after connect', () => {
-    const fake = createFakeRoom();
-    renderViewer(fake.room);
-    const late = fakeHuman('rep-2');
-    act(() => fake.addParticipant(late));
-    expect(lastCall(fake)).toEqual([true, []]);
-    act(() => fake.setParticipantAttributes(late, { [ATTR_ROLE]: 'observer' }));
-    expect(lastCall(fake)?.[0]).toBe(false);
   });
 
   it('no live share: answers no_share immediately, no prompt', async () => {
@@ -389,6 +452,26 @@ describe('useScreenshareSession wiring', () => {
     expect(fake.rpcHandlers.has(RPC_TAKEOVER_REQUEST_VIEWER_CONSENT)).toBe(true);
     unmount();
     expect(fake.rpcHandlers.has(RPC_TAKEOVER_REQUEST_VIEWER_CONSENT)).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('fails closed: a permissions throw during a live share takes the screen down', async () => {
+    stubNavigator({ capable: true });
+    const fake = createFakeRoom();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <RoomContext.Provider value={fake.room as unknown as Room}>{children}</RoomContext.Provider>
+    );
+    renderHook(() => useScreenshareSession(), { wrapper });
+    fake.setTrackSubscriptionPermissions.mockImplementation(() => {
+      throw new Error('signal down');
+    });
+    await act(async () => {
+      fake.publishScreen('TR_scr_1');
+    });
+    expect(fake.setScreenShareEnabled).toHaveBeenCalledWith(false);
+    expect(fake.getTrackPublication()).toBeUndefined();
+    errorSpy.mockRestore();
     vi.unstubAllGlobals();
   });
 });

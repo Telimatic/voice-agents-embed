@@ -59,7 +59,11 @@ const SCREEN_SOURCES: readonly Track.Source[] = [
   Track.Source.ScreenShareAudio,
 ];
 
-/** Spec §6, pure. */
+/**
+ * Spec §6 as ruled (R19), pure. While a screen track is live the list is ALWAYS
+ * restricted, staff present or not, so someone who joins mid-share is never let in by
+ * default before the widget hears they joined. With no screen there is nothing to hide.
+ */
 export function computePermissions({
   remotes,
   localTracks,
@@ -71,7 +75,7 @@ export function computePermissions({
   grantedIdentities: ReadonlySet<string>;
   screenSid: string | null;
 }): { allParticipantsAllowed: boolean; trackPermissions: TrackPermission[] } {
-  if (!remotes.some(isStaffParticipant)) {
+  if (!screenSid) {
     return { allParticipantsAllowed: true, trackPermissions: [] };
   }
   const published = localTracks.filter((track) => track.trackSid);
@@ -86,8 +90,7 @@ export function computePermissions({
         ? { participantIdentity: remote.identity, allowAll: true }
         : {
             participantIdentity: remote.identity,
-            allowedTrackSids:
-              screenSid && grantedIdentities.has(remote.identity) ? everything : voiceOnly,
+            allowedTrackSids: grantedIdentities.has(remote.identity) ? everything : voiceOnly,
           }
     ),
   };
@@ -118,8 +121,17 @@ export interface ScreenViewerPermissions {
   handleViewerConsent: (data: RpcInvocationData) => Promise<string>;
 }
 
-export function useScreenViewerPermissions(): ScreenViewerPermissions {
+export interface ScreenViewerPermissionsOptions {
+  /** Called when the restriction could not be applied while a screen is live: stop it. */
+  onFailClosed?: () => void;
+}
+
+export function useScreenViewerPermissions(
+  options: ScreenViewerPermissionsOptions = {}
+): ScreenViewerPermissions {
   const room = useRoomContext();
+  const onFailClosedRef = useRef(options.onFailClosed);
+  onFailClosedRef.current = options.onFailClosed;
   const [viewerConsentRequest, setViewerConsentRequest] = useState<ViewerConsentPrompt | null>(
     null
   );
@@ -168,6 +180,10 @@ export function useScreenViewerPermissions(): ScreenViewerPermissions {
       );
     } catch (err) {
       console.error('[screenshare] could not update track subscription permissions', err);
+      // Fail closed: a screen nobody can restrict is a screen that must not stay live.
+      if (screenSid) {
+        onFailClosedRef.current?.();
+      }
     }
   }, [finish, room, screenSidNow]);
 
@@ -176,15 +192,21 @@ export function useScreenViewerPermissions(): ScreenViewerPermissions {
       return;
     }
     apply();
+    // Leaving ends a grant: someone who rejoins mid-share is asked again.
+    const onDisconnected = (participant: { identity: string }) => {
+      grantsRef.current.identities.delete(participant.identity);
+      apply();
+    };
+    room.on(RoomEvent.ParticipantDisconnected, onDisconnected);
     const events = [
       RoomEvent.ParticipantConnected,
-      RoomEvent.ParticipantDisconnected,
       RoomEvent.ParticipantAttributesChanged,
       RoomEvent.LocalTrackPublished,
       RoomEvent.LocalTrackUnpublished,
     ] as const;
     events.forEach((event) => room.on(event, apply));
     return () => {
+      room.off(RoomEvent.ParticipantDisconnected, onDisconnected);
       events.forEach((event) => room.off(event, apply));
     };
   }, [room, apply]);

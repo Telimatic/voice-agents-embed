@@ -211,8 +211,20 @@ export function useScreenshareSession(
   // the worker widens the permission after the resolver approves the session, and the
   // SDK reports that as ParticipantPermissionsChanged, which this hook re-renders on.
   const { screenShare: enabled } = usePublishPermissions();
+  /** stopShare is defined below; the viewer hook's fail-closed path reaches it through this. */
+  const stopShareRef = useRef<(reason: StopReason) => Promise<boolean>>(async () => false);
   const { viewerConsentRequest, allowViewer, denyViewer, handleViewerConsent } =
-    useScreenViewerPermissions();
+    useScreenViewerPermissions({
+      // StopReason has no "permissions failed"; the widget is stopping on the caller's behalf.
+      onFailClosed: () => {
+        void stopShareRef.current('caller_stop').then((stopped) => {
+          if (!stopped) {
+            // The same last resort acceptConsent uses: end the capture at the source.
+            room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.stop();
+          }
+        });
+      },
+    });
 
   const [isSharing, setIsSharing] = useState(false);
   const [consentRequest, setConsentRequest] = useState<ConsentRequest | null>(null);
@@ -328,6 +340,7 @@ export function useScreenshareSession(
     },
     [room]
   );
+  stopShareRef.current = stopShare;
 
   /** Caller-initiated share, with no agent request outstanding. */
   const startShare = useCallback(async (): Promise<RequestConsentResponse> => {
