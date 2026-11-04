@@ -251,6 +251,8 @@ export function useScreenshareSession(
   const stopReasonRef = useRef<StopReason | null>(null);
   /** True while a browser picker is open, so a second accept cannot open a second one. */
   const capturingRef = useRef(false);
+  /** Set while rejecting a disallowed pick, so its unpublish is not reported as a stop. */
+  const rejectingPickRef = useRef(false);
   /** How the outstanding request was answered, when something other than the caller answered it. */
   const settledResultRef = useRef<ConsentResult | null>(null);
   /** Pending "the agent has gone" check; see AGENT_LEFT_GRACE_MS. */
@@ -291,26 +293,52 @@ export function useScreenshareSession(
         // Staff already in the room must not be able to subscribe to the screen while it
         // negotiates; a synchronous refusal lands in the catch and no picker opens.
         restrictBeforeShare();
-        const pub = await localParticipant.setScreenShareEnabled(true, {
-          // Tab audio is never captured: the caller is already on a voice call and
-          // publishing their tab's audio would echo it back into the room.
-          audio: false,
-          video: { displaySurface: preferredSurface(allowedSurfaces) },
-          contentHint: 'text',
-          selfBrowserSurface: 'exclude',
-          surfaceSwitching: 'include',
-          // Screen content is mostly static, so a low frame rate costs the agent nothing
-          // and leaves far more headroom for the audio the call actually depends on.
-          //
-          // Omitted entirely on Safari: livekit-client documents that on Safari 17,
-          // "specifying any resolution at all would lead to a low-resolution capture"
-          // (WebKit bug 263015), and its own default is already uncapped there. A
-          // low-resolution capture makes on-screen text unreadable, which is the whole
-          // point of the feature — worth more than the frame-rate hint.
-          ...(isSafari() ? {} : { resolution: { width: 1920, height: 1080, frameRate: 3 } }),
-        });
+        const pub = await localParticipant.setScreenShareEnabled(
+          true,
+          {
+            // Tab audio is never captured: the caller is already on a voice call and
+            // publishing their tab's audio would echo it back into the room.
+            audio: false,
+            video: { displaySurface: preferredSurface(allowedSurfaces) },
+            contentHint: 'text',
+            selfBrowserSurface: 'exclude',
+            surfaceSwitching: 'include',
+            // Screen content is mostly static, so a low frame rate costs the agent nothing
+            // and leaves far more headroom for the audio the call actually depends on.
+            //
+            // Omitted entirely on Safari: livekit-client documents that on Safari 17,
+            // "specifying any resolution at all would lead to a low-resolution capture"
+            // (WebKit bug 263015), and its own default is already uncapped there. A
+            // low-resolution capture makes on-screen text unreadable, which is the whole
+            // point of the feature — worth more than the frame-rate hint.
+            ...(isSafari() ? {} : { resolution: { width: 1920, height: 1080, frameRate: 3 } }),
+          },
+          {
+            // Audio wins the uplink: the screen is low priority, capped, and may drop
+            // resolution before frame rate. (`screenShareEncoding`, not `videoEncoding`:
+            // livekit-client ignores the latter for screen tracks.)
+            screenShareEncoding: { maxBitrate: 1_500_000, maxFramerate: 3, priority: 'low' },
+            degradationPreference: 'balanced',
+          }
+        );
         if (!pub)
           return { v: SCREENSHARE_PROTOCOL_VERSION, result: 'failed', reason: 'no_publication' };
+        // The picker cannot be restricted, so the pick is checked after the fact.
+        // shortcut: Safari/Firefox report no displaySurface, so those picks cannot be verified and are allowed.
+        const picked = surfaceOf(pub);
+        if (picked && !allowedSurfaces.includes(picked)) {
+          rejectingPickRef.current = true;
+          try {
+            await localParticipant.setScreenShareEnabled(false);
+          } finally {
+            rejectingPickRef.current = false;
+          }
+          return {
+            v: SCREENSHARE_PROTOCOL_VERSION,
+            result: 'cancelled',
+            reason: 'surface_not_allowed',
+          };
+        }
         return {
           v: SCREENSHARE_PROTOCOL_VERSION,
           result: 'granted',
@@ -619,6 +647,9 @@ export function useScreenshareSession(
         return;
       }
       setIsSharing(false);
+      if (rejectingPickRef.current) {
+        return;
+      }
       const reason = stopReasonRef.current ?? 'browser_stop';
       stopReasonRef.current = null;
       onStoppedRef.current?.(reason);

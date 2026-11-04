@@ -193,6 +193,50 @@ describe('useScreenshareSession', () => {
     expect(response.track_sid).toBe('TR_screen_9');
   });
 
+  it('publishes the screen at low priority, capped, so audio keeps the uplink', async () => {
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
+    const hook = renderSession(room);
+    await shareUntilGranted(rpcHandlers, hook);
+
+    expect((setScreenShareEnabled.mock.calls[0] as unknown[])[2]).toEqual({
+      screenShareEncoding: { maxBitrate: 1_500_000, maxFramerate: 3, priority: 'low' },
+      degradationPreference: 'balanced',
+    });
+  });
+
+  it('stops a pick outside the allowed surfaces and answers cancelled', async () => {
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
+    const onStopped = vi.fn();
+    const hook = renderSession(room, { onStopped });
+
+    // The fake picker hands back a window; only a tab was allowed.
+    const rpc = invokeConsent(
+      rpcHandlers.get(RPC_REQUEST_CONSENT)!,
+      consentPayload({ scope: ['browser'] })
+    );
+    await waitFor(() => expect(hook.result.current.consentRequest).not.toBeNull());
+    await act(async () => {
+      await hook.result.current.acceptConsent();
+    });
+
+    const response = await parse(rpc);
+    expect(response.result).toBe('cancelled');
+    expect(response.reason).toBe('surface_not_allowed');
+    expect(setScreenShareEnabled).toHaveBeenLastCalledWith(false);
+    expect(hook.result.current.isSharing).toBe(false);
+    expect(onStopped).not.toHaveBeenCalled();
+  });
+
+  it('allows a pick whose surface the browser does not report', async () => {
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
+    setScreenShareEnabled.mockResolvedValueOnce(fakePublication(undefined, 'TR_screen_4'));
+    const hook = renderSession(room);
+
+    const response = await parse(shareUntilGranted(rpcHandlers, hook));
+    expect(response.result).toBe('granted');
+    expect(setScreenShareEnabled).toHaveBeenCalledTimes(1);
+  });
+
   it('answers cancelled when the caller dismisses the browser picker', async () => {
     const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
     const denied = Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' });
