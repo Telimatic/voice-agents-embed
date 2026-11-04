@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { ParticipantKind, Room, RpcError, Track } from 'livekit-client';
+import { ParticipantKind, Room, RoomEvent, RpcError, Track } from 'livekit-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RoomContext } from '@livekit/components-react';
 // eslint-disable-next-line import/named
@@ -23,8 +23,10 @@ import {
   createFakeRoom,
   fakeAgent,
   fakeHuman,
+  fakePublication,
   fakeSip,
   fakeStaff,
+  holdPicker,
   stubNavigator,
 } from './fake-room';
 
@@ -601,6 +603,96 @@ describe('useScreenshareSession wiring', () => {
     });
     await act(async () => {
       await hook.result.current.startShare();
+    });
+    expect(lastCall(fake)).toEqual([true, []]);
+    vi.unstubAllGlobals();
+  });
+
+  it('stays restricted while the picker is open: a staff join and a mic publish do not reopen it', async () => {
+    const { fake, hook } = sessionWithStaff();
+    const picker = holdPicker(fake);
+    let share!: Promise<unknown>;
+    act(() => {
+      share = hook.result.current.startShare();
+    });
+    expect(lastCall(fake)).toEqual(RESTRICTED);
+
+    act(() => fake.addParticipant(fakeStaff('obs-1', 'observer')));
+    expect(lastCall(fake)).toEqual([
+      false,
+      [
+        { participantIdentity: 'agent-1', allowAll: true },
+        { participantIdentity: 'rep-1', allowedTrackSids: ['TR_mic'] },
+        { participantIdentity: 'obs-1', allowedTrackSids: ['TR_mic'] },
+      ],
+    ]);
+
+    act(() => fake.publishMic('TR_mic_2'));
+    expect(lastCall(fake)?.[0]).toBe(false);
+    expect(lastCall(fake)?.[1]).toContainEqual({
+      participantIdentity: 'obs-1',
+      allowedTrackSids: ['TR_mic_2'],
+    });
+
+    await act(async () => {
+      const pub = picker.release(fakePublication('window', 'TR_scr_new'));
+      fake.room.emit(RoomEvent.LocalTrackPublished, pub);
+      await share;
+    });
+    // From the first restricted call on, no staff list ever held the new screen sid.
+    fake.setTrackSubscriptionPermissions.mock.calls.forEach(([all, perms]) => {
+      (perms as { participantIdentity: string; allowedTrackSids?: string[] }[])
+        .filter((entry) => entry.participantIdentity !== 'agent-1')
+        .forEach((entry) => expect(entry.allowedTrackSids).not.toContain('TR_scr_new'));
+      void all;
+    });
+    expect(lastCall(fake)?.[0]).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('cancelling the open picker returns to (true, [])', async () => {
+    const { fake, hook } = sessionWithStaff();
+    fake.setScreenShareEnabled.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) =>
+          setTimeout(() => reject(Object.assign(new Error('x'), { name: 'NotAllowedError' })), 0)
+        )
+    );
+    let share!: Promise<unknown>;
+    act(() => {
+      share = hook.result.current.startShare();
+    });
+    act(() => fake.addParticipant(fakeStaff('obs-1', 'observer')));
+    expect(lastCall(fake)?.[0]).toBe(false);
+    await act(async () => {
+      await share;
+    });
+    expect(lastCall(fake)).toEqual([true, []]);
+    vi.unstubAllGlobals();
+  });
+
+  it('overlapping starts: the first one ending does not lift the restriction of the second', async () => {
+    const { fake, hook } = sessionWithStaff();
+    const first = holdPicker(fake);
+    let a!: Promise<unknown>;
+    act(() => {
+      a = hook.result.current.startShare();
+    });
+    const second = holdPicker(fake);
+    let b!: Promise<unknown>;
+    act(() => {
+      b = hook.result.current.startShare();
+    });
+    await act(async () => {
+      first.release(undefined as unknown as ReturnType<typeof fakePublication>);
+      fake.setPublished(undefined);
+      await a;
+    });
+    expect(lastCall(fake)).toEqual(RESTRICTED);
+    await act(async () => {
+      second.release(undefined as unknown as ReturnType<typeof fakePublication>);
+      fake.setPublished(undefined);
+      await b;
     });
     expect(lastCall(fake)).toEqual([true, []]);
     vi.unstubAllGlobals();

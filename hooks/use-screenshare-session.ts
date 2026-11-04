@@ -219,7 +219,7 @@ export function useScreenshareSession(
     denyViewer,
     handleViewerConsent,
     restrictBeforeShare,
-    refreshPermissions,
+    shareStartEnded,
   } = useScreenViewerPermissions({
     // StopReason has no "permissions failed"; the widget is stopping on the caller's behalf.
     onRestrictionRefused: () => {
@@ -319,11 +319,11 @@ export function useScreenshareSession(
         const result = name === 'NotAllowedError' ? 'cancelled' : 'failed';
         return { v: SCREENSHARE_PROTOCOL_VERSION, result, reason: name };
       } finally {
-        // A picker that published nothing must not leave the room restricted.
-        refreshPermissions();
+        // Ends this start's pre-publish restriction; a published screen keeps its own.
+        shareStartEnded();
       }
     },
-    [refreshPermissions, restrictBeforeShare, room]
+    [shareStartEnded, restrictBeforeShare, room]
   );
 
   const stopShare = useCallback(

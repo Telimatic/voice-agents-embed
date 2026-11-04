@@ -130,8 +130,11 @@ export interface ScreenViewerPermissions {
    * Throws if the SDK refuses synchronously; the share must then not start.
    */
   restrictBeforeShare: () => void;
-  /** Recompute from the room as it is now (e.g. after a picker that published nothing). */
-  refreshPermissions: () => void;
+  /**
+   * Pair of restrictBeforeShare, called once the picker has resolved either way (in a
+   * finally). Lifts that start's restriction and recomputes from the room as it is now.
+   */
+  shareStartEnded: () => void;
   /** The `takeover.requestViewerConsent` RPC handler; registered by the session hook. */
   handleViewerConsent: (data: RpcInvocationData) => Promise<string>;
 }
@@ -173,6 +176,25 @@ export function useScreenViewerPermissions(
     setViewerConsentRequest(queueRef.current[0]?.prompt ?? null);
   }, []);
 
+  /**
+   * Shares being started (picker open). While any is, the list stays restricted as if the
+   * screen were already published: a join or mic publish meanwhile must not reopen it.
+   * A count, not a flag, so one start finishing cannot lift another's restriction.
+   */
+  const startingRef = useRef(0);
+
+  const currentPermissions = useCallback(
+    (screenSid: string | null) =>
+      computePermissions({
+        remotes: Array.from(room.remoteParticipants.values()),
+        localTracks: Array.from(room.localParticipant.trackPublications.values()),
+        grantedIdentities: grantsRef.current.identities,
+        // Not a real sid: no screen yet, but the list must already be restricted.
+        screenSid: screenSid ?? (startingRef.current > 0 ? 'pre-publish' : null),
+      }),
+    [room]
+  );
+
   const apply = useCallback(() => {
     const screenSid = screenSidNow();
     if (grantsRef.current.screenSid !== screenSid) {
@@ -182,12 +204,7 @@ export function useScreenViewerPermissions(
         .filter((entry) => entry.screenSid !== screenSid)
         .forEach((entry) => finish(entry, 'no_share'));
     }
-    const { allParticipantsAllowed, trackPermissions } = computePermissions({
-      remotes: Array.from(room.remoteParticipants.values()),
-      localTracks: Array.from(room.localParticipant.trackPublications.values()),
-      grantedIdentities: grantsRef.current.identities,
-      screenSid,
-    });
+    const { allParticipantsAllowed, trackPermissions } = currentPermissions(screenSid);
     try {
       room.localParticipant.setTrackSubscriptionPermissions(
         allParticipantsAllowed,
@@ -202,7 +219,7 @@ export function useScreenViewerPermissions(
         onRestrictionRefusedRef.current?.();
       }
     }
-  }, [finish, room, screenSidNow]);
+  }, [currentPermissions, finish, room, screenSidNow]);
 
   useEffect(() => {
     if (!room) {
@@ -325,20 +342,22 @@ export function useScreenViewerPermissions(
   );
 
   const restrictBeforeShare = useCallback(() => {
-    const { allParticipantsAllowed, trackPermissions } = computePermissions({
-      remotes: Array.from(room.remoteParticipants.values()),
-      localTracks: Array.from(room.localParticipant.trackPublications.values()),
-      grantedIdentities: new Set(),
-      // Not a real sid: there is no screen yet, but the list must already be restricted.
-      screenSid: 'pre-publish',
-    });
+    // Counted first, so the caller's matching shareStartEnded() always balances it.
+    startingRef.current += 1;
+    // Grants belong to a screen sid; with no screen yet, the set apply() keyed is empty.
+    const { allParticipantsAllowed, trackPermissions } = currentPermissions(screenSidNow());
     room.localParticipant.setTrackSubscriptionPermissions(allParticipantsAllowed, trackPermissions);
-  }, [room]);
+  }, [currentPermissions, room, screenSidNow]);
+
+  const shareStartEnded = useCallback(() => {
+    startingRef.current = Math.max(0, startingRef.current - 1);
+    apply();
+  }, [apply]);
 
   return {
     viewerConsentRequest,
     restrictBeforeShare,
-    refreshPermissions: apply,
+    shareStartEnded,
     allowViewer: useCallback(() => answer(true), [answer]),
     denyViewer: useCallback(() => answer(false), [answer]),
     handleViewerConsent,
