@@ -103,6 +103,8 @@ export interface ScreenshareSession {
    * display, and there is an agent listening for the share.
    */
   canShare: boolean;
+  /** Screen sharing is permitted but this browser cannot capture; offer a photo instead. */
+  shareUnsupported: boolean;
   consentRequest: ConsentRequest | null;
   acceptConsent: () => Promise<void>;
   declineConsent: () => void;
@@ -762,6 +764,8 @@ export function useScreenshareSession(
     // start a share nobody is listening for, producing a screen track against no consent
     // record at all.
     canShare: enabled && capable && agentReady,
+    // The agent may use screen sharing but this browser cannot: the widget offers a photo.
+    shareUnsupported: enabled && !capable,
     consentRequest,
     acceptConsent,
     declineConsent,

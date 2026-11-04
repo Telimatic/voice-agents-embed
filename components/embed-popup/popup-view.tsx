@@ -15,6 +15,7 @@ import { ActionBar } from '@/components/embed-popup/action-bar';
 import { AudioVisualizer } from '@/components/embed-popup/audio-visualizer';
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
 import { ParticipantStrip } from '@/components/embed-popup/participant-strip';
+import { PhotoFallback } from '@/components/embed-popup/photo-fallback';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
 import { Transcript } from '@/components/embed-popup/transcript';
 import useChatAndTranscription from '@/hooks/use-chat-and-transcription';
@@ -72,7 +73,7 @@ export const PopupView = ({
     audioTrack: agentAudioTrack,
     videoTrack: agentVideoTrack,
   } = useVoiceAssistant();
-  const { isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
+  const { isCameraEnabled, isScreenShareEnabled, localParticipant } = useLocalParticipant();
   const cameraTrack: TrackReference | undefined = useLocalTrackRef(Track.Source.Camera);
   // The caller's OWN screen track. `useTracks` would also return a remote one.
   const localScreenShareTrack: TrackReference | undefined = useLocalTrackRef(
@@ -91,8 +92,16 @@ export const PopupView = ({
   // TLZ-561. Owns the consent prompt and the screen track. Whether a share may be offered
   // is derived inside the hook from the live publish permission (widened by the worker at
   // runtime) and the agent's attributes, so nothing is threaded in from the token route.
-  const { canShare, consentRequest, acceptConsent, declineConsent, startShare, stopShare } =
-    useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
+  const {
+    canShare,
+    shareUnsupported,
+    agentReady,
+    consentRequest,
+    acceptConsent,
+    declineConsent,
+    startShare,
+    stopShare,
+  } = useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
 
   const { supportsChatInput, supportsVideoInput } = appConfig;
   const capabilities = {
@@ -367,6 +376,9 @@ export const PopupView = ({
 
         {/* Team members in the call (TLZ-561). Below the sharing banner when both show. */}
         <ParticipantStrip className={isScreenShareEnabled ? 'top-[4.5rem]' : 'top-2'} />
+
+        {/* Photo fallback (TLZ-561, A4): only while an agent is there to receive it. */}
+        {shareUnsupported && agentReady && <PhotoFallback participant={localParticipant} />}
 
         {/* Screenshare consent (TLZ-561). Panel-filling: agreeing to share a screen is
             not a decision to make out of the corner of an eye. */}

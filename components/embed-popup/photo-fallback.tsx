@@ -1,0 +1,60 @@
+'use client';
+
+import * as React from 'react';
+import { PHOTO_MAX_BYTES, PHOTO_TOPIC } from '@/lib/screenshare-protocol';
+
+/**
+ * TLZ-561 (A4). A browser that cannot share its screen says so and offers a photo instead,
+ * sent to the agent over a LiveKit byte stream on `PHOTO_TOPIC`.
+ */
+export interface PhotoFallbackProps {
+  /** The local participant (anything with `sendFile`). */
+  participant: { sendFile: (file: File, options?: { topic?: string }) => Promise<unknown> };
+}
+
+export function PhotoFallback({ participant }: PhotoFallbackProps) {
+  const [status, setStatus] = React.useState<{ kind: 'error' | 'sent'; text: string } | null>(null);
+
+  async function onChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      setStatus({ kind: 'error', text: 'Please choose an image file.' });
+    } else if (file.size > PHOTO_MAX_BYTES) {
+      setStatus({
+        kind: 'error',
+        text: `That photo is too large. Please choose one under ${PHOTO_MAX_BYTES / (1024 * 1024)} MB.`,
+      });
+    } else {
+      try {
+        await participant.sendFile(file, { topic: PHOTO_TOPIC });
+        setStatus({ kind: 'sent', text: 'Photo sent.' });
+      } catch {
+        setStatus({ kind: 'error', text: 'The photo could not be sent. Please try again.' });
+      }
+    }
+    // Lets the same file be chosen again after an error.
+    input.value = '';
+  }
+
+  return (
+    <div
+      data-testid="photo-fallback"
+      className="bg-bg2 border-separator1 dark:border-separator2 absolute inset-x-2 top-2 z-30 rounded-2xl border p-3 text-sm drop-shadow-md"
+    >
+      <p>Screen sharing isn&apos;t available in this browser. You can send a photo instead.</p>
+      <label className="mt-2 block">
+        <span className="sr-only">Choose a photo to send</span>
+        <input type="file" accept="image/*" onChange={(e) => void onChange(e)} />
+      </label>
+      {status && (
+        <p role={status.kind === 'error' ? 'alert' : 'status'} className="mt-2">
+          {status.text}
+        </p>
+      )}
+    </div>
+  );
+}
