@@ -13,6 +13,7 @@ import {
 } from '@livekit/components-react';
 import { ActionBar } from '@/components/embed-popup/action-bar';
 import { AudioVisualizer } from '@/components/embed-popup/audio-visualizer';
+import { ContentPanel } from '@/components/embed-popup/content-panel';
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
 import { Transcript } from '@/components/embed-popup/transcript';
@@ -363,6 +364,8 @@ export const PopupView = ({
             }}
           />
         )}
+
+        <ContentPanel />
 
         {/* Screenshare consent (TLZ-561). Panel-filling: agreeing to share a screen is
             not a decision to make out of the corner of an eye. */}

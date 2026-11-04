@@ -17,6 +17,7 @@ import {
   SpinnerIcon,
 } from '@phosphor-icons/react';
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
+import { ContentPanel } from '@/components/embed-popup/content-panel';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
 import {
   useScreenshareCallerConsentNotifier,
@@ -241,6 +242,8 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
           }}
         />
       )}
+
+      <ContentPanel />
 
       {/* The iframe theme sets --background to transparent so the page blends into the
           host, which leaves the overlay's own bg-background with no fill here: the
