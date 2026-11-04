@@ -13,8 +13,8 @@ import {
 } from '@livekit/components-react';
 import { ActionBar } from '@/components/embed-popup/action-bar';
 import { AudioVisualizer } from '@/components/embed-popup/audio-visualizer';
-import { ContentPanel } from '@/components/embed-popup/content-panel';
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
+import { ContentPanel } from '@/components/embed-popup/content-panel';
 import { ParticipantStrip } from '@/components/embed-popup/participant-strip';
 import { PhotoFallback } from '@/components/embed-popup/photo-fallback';
 import { ShareBanner } from '@/components/embed-popup/share-banner';

@@ -17,8 +17,8 @@ import {
   SpinnerIcon,
 } from '@phosphor-icons/react';
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
-import { ParticipantStrip } from '@/components/embed-popup/participant-strip';
 import { ContentPanel } from '@/components/embed-popup/content-panel';
+import { ParticipantStrip } from '@/components/embed-popup/participant-strip';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
 import { ViewerConsentOverlay } from '@/components/embed-popup/viewer-consent-overlay';
 import {
