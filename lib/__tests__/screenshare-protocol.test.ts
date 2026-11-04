@@ -254,7 +254,7 @@ describe('takeover + display push contract (fixture)', () => {
     displayPushResponse: { guard: isDisplayPushResponse, valid: [e.displayPushResponse] },
     displayHighlightPayload: {
       guard: isDisplayHighlightPayload,
-      valid: [e.displayHighlightPayload],
+      valid: [e.displayHighlightPayload, e.displayHighlightRegionPayload],
     },
     displayHighlightResponse: {
       guard: isDisplayHighlightResponse,

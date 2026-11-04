@@ -248,6 +248,8 @@ const isUnit = (x: unknown): x is number => typeof x === 'number' && x >= 0 && x
 export const isDisplayHighlightPayload = (p: unknown): p is DisplayHighlightPayload =>
   ver(p) &&
   isNonEmptyStr(p.id) &&
+  // Exactly one target: a step or a region, never neither or both.
+  (p.step === undefined) !== (p.region === undefined) &&
   (p.step === undefined || (Number.isInteger(p.step) && (p.step as number) >= 0)) &&
   (p.region === undefined ||
     (isRec(p.region) &&

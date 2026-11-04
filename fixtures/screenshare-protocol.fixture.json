@@ -102,13 +102,7 @@
     "displayHighlightPayload": {
       "v": 1,
       "id": "d1",
-      "step": 2,
-      "region": {
-        "x": 0.1,
-        "y": 0.2,
-        "w": 0.5,
-        "h": 0.25
-      }
+      "step": 2
     },
     "displayHighlightResponse": {
       "v": 1,
@@ -121,6 +115,16 @@
       "v": 1,
       "event": "dismissed",
       "id": "d1"
+    },
+    "displayHighlightRegionPayload": {
+      "v": 1,
+      "id": "d1",
+      "region": {
+        "x": 0.1,
+        "y": 0.2,
+        "w": 0.5,
+        "h": 0.25
+      }
     }
   },
   "constants": {
@@ -255,6 +259,21 @@
           "y": 0,
           "w": 0.1,
           "h": 0.1
+        }
+      },
+      {
+        "v": 1,
+        "id": "d1"
+      },
+      {
+        "v": 1,
+        "id": "d1",
+        "step": 1,
+        "region": {
+          "x": 0.1,
+          "y": 0.2,
+          "w": 0.5,
+          "h": 0.25
         }
       }
     ],
