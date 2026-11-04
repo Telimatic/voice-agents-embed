@@ -112,3 +112,154 @@ export interface NotifyResponse {
 export function isCurrentVersion(payload: { v?: unknown }): boolean {
   return payload?.v === SCREENSHARE_PROTOCOL_VERSION;
 }
+
+// ── Takeover + display push (TLZ-561 remaining epics, spec §5) ─────────────────────────
+
+/** Agent to widget. */
+export const RPC_TAKEOVER_REQUEST_VIEWER_CONSENT = 'takeover.requestViewerConsent';
+export const RPC_DISPLAY_PUSH = 'display.push';
+export const RPC_DISPLAY_HIGHLIGHT = 'display.highlight';
+export const RPC_DISPLAY_CLEAR = 'display.clear';
+/** Widget to agent. */
+export const RPC_DISPLAY_NOTIFY = 'display.notify';
+
+/** Minted by the dashboard into rep/observer tokens. */
+export const ATTR_ROLE = 'telzino.role';
+export const ATTR_DISPLAY_NAME = 'telzino.display_name';
+
+/** Byte stream topic, widget to agent. */
+export const PHOTO_TOPIC = 'telzino.photo';
+export const PHOTO_MAX_BYTES = 8 * 1024 * 1024;
+export const VIEWER_CONSENT_TIMEOUT_S = 30;
+
+export type ViewerRole = 'rep' | 'observer';
+export type ViewerConsentOutcome = 'granted' | 'declined' | 'timeout' | 'no_share';
+export type DisplayKind = 'url' | 'image' | 'pdf' | 'payment' | 'steps';
+export type DisplayPushError = 'not_allowlisted' | 'bad_payload';
+export type DisplayNotifyEvent = 'dismissed' | 'minimized' | 'reopened' | 'payment_opened';
+
+export interface ViewerConsentRequest {
+  v: number;
+  viewer: { identity: string; name: string; role: ViewerRole };
+}
+export interface ViewerConsentResponse {
+  v: number;
+  outcome: ViewerConsentOutcome;
+}
+export interface DisplayPushPayload {
+  v: number;
+  id: string;
+  kind: DisplayKind;
+  title: string;
+  url?: string;
+  steps?: string[];
+  amount_label?: string;
+}
+export interface DisplayPushResponse {
+  v: number;
+  ok: boolean;
+  error?: DisplayPushError;
+}
+export interface DisplayHighlightPayload {
+  v: number;
+  id: string;
+  step?: number;
+  /** 0-1 normalized. */
+  region?: { x: number; y: number; w: number; h: number };
+}
+export interface DisplayHighlightResponse {
+  v: number;
+  ok: boolean;
+}
+export interface DisplayClearPayload {
+  v: number;
+}
+export interface DisplayNotifyPayload {
+  v: number;
+  event: DisplayNotifyEvent;
+  id: string;
+}
+
+export const VIEWER_ROLES: readonly ViewerRole[] = ['rep', 'observer'];
+export const VIEWER_CONSENT_OUTCOMES: readonly ViewerConsentOutcome[] = [
+  'granted',
+  'declined',
+  'timeout',
+  'no_share',
+];
+export const DISPLAY_KINDS: readonly DisplayKind[] = ['url', 'image', 'pdf', 'payment', 'steps'];
+export const DISPLAY_PUSH_ERRORS: readonly DisplayPushError[] = ['not_allowlisted', 'bad_payload'];
+export const DISPLAY_NOTIFY_EVENTS: readonly DisplayNotifyEvent[] = [
+  'dismissed',
+  'minimized',
+  'reopened',
+  'payment_opened',
+];
+
+const MAX_STEPS = 10;
+const URL_KINDS: readonly DisplayKind[] = ['url', 'image', 'pdf', 'payment'];
+
+type Rec = Record<string, unknown>;
+const isRec = (p: unknown): p is Rec => typeof p === 'object' && p !== null && !Array.isArray(p);
+const isStr = (x: unknown): x is string => typeof x === 'string';
+const isNonEmptyStr = (x: unknown): x is string => isStr(x) && x.length > 0;
+const oneOf = <T extends string>(list: readonly T[], x: unknown): x is T =>
+  isStr(x) && (list as readonly string[]).includes(x);
+const ver = (p: unknown): p is Rec => isRec(p) && isCurrentVersion(p);
+
+export const isViewerConsentRequest = (p: unknown): p is ViewerConsentRequest =>
+  ver(p) &&
+  isRec(p.viewer) &&
+  isNonEmptyStr(p.viewer.identity) &&
+  isStr(p.viewer.name) &&
+  oneOf(VIEWER_ROLES, p.viewer.role);
+
+export const isViewerConsentResponse = (p: unknown): p is ViewerConsentResponse =>
+  ver(p) && oneOf(VIEWER_CONSENT_OUTCOMES, p.outcome);
+
+/** Same rules as the worker's `build_display_push`: https only, 1-10 non-empty steps. */
+export function isDisplayPushPayload(p: unknown): p is DisplayPushPayload {
+  if (!ver(p) || !isNonEmptyStr(p.id) || !oneOf(DISPLAY_KINDS, p.kind) || !isStr(p.title)) {
+    return false;
+  }
+  if (p.amount_label !== undefined && !isStr(p.amount_label)) return false;
+  if (p.kind === 'steps') {
+    return (
+      Array.isArray(p.steps) &&
+      p.steps.length >= 1 &&
+      p.steps.length <= MAX_STEPS &&
+      p.steps.every(isNonEmptyStr)
+    );
+  }
+  return (
+    (URL_KINDS as readonly string[]).includes(p.kind) &&
+    isStr(p.url) &&
+    p.url.startsWith('https://')
+  );
+}
+
+export const isDisplayPushResponse = (p: unknown): p is DisplayPushResponse =>
+  ver(p) &&
+  typeof p.ok === 'boolean' &&
+  (p.error === undefined || oneOf(DISPLAY_PUSH_ERRORS, p.error));
+
+const isUnit = (x: unknown): x is number => typeof x === 'number' && x >= 0 && x <= 1;
+
+export const isDisplayHighlightPayload = (p: unknown): p is DisplayHighlightPayload =>
+  ver(p) &&
+  isNonEmptyStr(p.id) &&
+  (p.step === undefined || (Number.isInteger(p.step) && (p.step as number) >= 0)) &&
+  (p.region === undefined ||
+    (isRec(p.region) &&
+      isUnit(p.region.x) &&
+      isUnit(p.region.y) &&
+      isUnit(p.region.w) &&
+      isUnit(p.region.h)));
+
+export const isDisplayHighlightResponse = (p: unknown): p is DisplayHighlightResponse =>
+  ver(p) && typeof p.ok === 'boolean';
+
+export const isDisplayClearPayload = (p: unknown): p is DisplayClearPayload => ver(p);
+
+export const isDisplayNotifyPayload = (p: unknown): p is DisplayNotifyPayload =>
+  ver(p) && oneOf(DISPLAY_NOTIFY_EVENTS, p.event) && isNonEmptyStr(p.id);
