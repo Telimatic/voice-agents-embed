@@ -72,7 +72,10 @@ export async function POST(req: Request) {
           req.headers.get('origin'),
           secret
         );
-        if (agentId && agentId.toLowerCase() !== verified.agentId.toLowerCase()) {
+        if (
+          agentId &&
+          (typeof agentId !== 'string' || agentId.toLowerCase() !== verified.agentId.toLowerCase())
+        ) {
           return refuse(400, { error: 'agent_mismatch' });
         }
         agentId = verified.agentId;

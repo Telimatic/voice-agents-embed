@@ -302,6 +302,18 @@ describe('web call session token (TLZ-742) — session id into room metadata, se
     expect(res.status).toBe(200);
   });
 
+  it.each([123, { id: AGENT }, [AGENT]])(
+    'refuses a non-text agent id in the body as agent_mismatch (%j)',
+    async (agentId) => {
+      const res = await POST(
+        postRequest({ sessionToken: await sessionToken(), agentId }, { origin: ORIGIN })
+      );
+      assertResponse(res);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('agent_mismatch');
+    }
+  );
+
   it('accepts the same agent id in the body (popup sends data-agent-id too)', async () => {
     const res = await POST(
       postRequest({ sessionToken: await sessionToken(), agentId: AGENT }, { origin: ORIGIN })
