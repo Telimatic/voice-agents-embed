@@ -7,17 +7,19 @@ import { ViewerConsentOverlay } from '@/components/embed-popup/viewer-consent-ov
 
 afterEach(cleanup);
 
-function renderOverlay(name = 'Dana') {
+function renderOverlay(name = 'Dana', role: 'rep' | 'observer' = 'rep', container?: HTMLElement) {
   const onAllow = vi.fn();
   const onDeny = vi.fn();
   render(
     <ViewerConsentOverlay
       name={name}
+      role={role}
       timeoutSeconds={30}
       expiresAt={Date.now() + 30_000}
       onAllow={onAllow}
       onDeny={onDeny}
-    />
+    />,
+    container ? { container } : undefined
   );
   return { onAllow, onDeny };
 }
@@ -33,6 +35,33 @@ describe('ViewerConsentOverlay', () => {
   it('falls back to a neutral name', () => {
     renderOverlay('  ');
     expect(screen.getByRole('dialog')).toHaveTextContent('Allow a team member to see your screen?');
+  });
+
+  it('says when the person is an observer', () => {
+    renderOverlay('Sam', 'observer');
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      'Allow Sam (observer) to see your screen?'
+    );
+    cleanup();
+    renderOverlay(' ', 'observer');
+    expect(screen.getByRole('dialog')).toHaveTextContent('Allow an observer to see your screen?');
+  });
+
+  it('keeps Tab inside the prompt when it renders in a shadow root (the popup)', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const container = document.createElement('div');
+    host.attachShadow({ mode: 'open' }).appendChild(container);
+    renderOverlay('Dana', 'rep', container);
+    const root = host.shadowRoot!;
+    const [allow, deny] = Array.from(root.querySelectorAll('button'));
+    deny.focus();
+    fireEvent.keyDown(root.querySelector('[role="dialog"]')!, { key: 'Tab' });
+    expect(root.activeElement).toBe(allow);
+    fireEvent.keyDown(root.querySelector('[role="dialog"]')!, { key: 'Tab', shiftKey: true });
+    expect(root.activeElement).toBe(deny);
+    cleanup();
+    host.remove();
   });
 
   it('Allow, Don’t allow and Escape answer', () => {
@@ -62,6 +91,7 @@ describe('ViewerConsentOverlay', () => {
     const view = render(
       <ViewerConsentOverlay
         name="Dana"
+        role="rep"
         timeoutSeconds={30}
         expiresAt={Date.now() + 30_000}
         onAllow={() => {}}

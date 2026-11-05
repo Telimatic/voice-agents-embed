@@ -39,6 +39,15 @@ export function secondsRemaining(expiresAt: number): number {
  * aria-modal is a promise that focus stays inside; Tab is where that promise is kept or
  * broken. Shared with the viewer-consent prompt.
  */
+/**
+ * The focused element in `node`'s own tree. Inside the popup's shadow root,
+ * document.activeElement is only the shadow host.
+ */
+export function activeElementOf(node: Node | null): Element | null {
+  const root = node?.getRootNode() as Document | ShadowRoot | undefined;
+  return root?.activeElement ?? document.activeElement;
+}
+
 export function keepFocusInside(
   panel: HTMLElement | null,
   event: React.KeyboardEvent<HTMLElement>
@@ -56,7 +65,7 @@ export function keepFocusInside(
   }
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
-  const active = document.activeElement;
+  const active = activeElementOf(panel);
 
   if (event.shiftKey && (active === first || active === panel)) {
     event.preventDefault();

@@ -14,6 +14,7 @@
     "capable": "telzino.screenshare.capable",
     "enabled": "telzino.screenshare.enabled",
     "allowedSurfaces": "telzino.screenshare.allowed_surfaces",
+    "displayCapable": "telzino.display.capable",
     "role": "telzino.role",
     "displayName": "telzino.display_name"
   },

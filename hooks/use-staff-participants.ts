@@ -12,9 +12,9 @@ export interface Staff {
 const EMPTY: { reps: Staff[]; observers: Staff[] } = { reps: [], observers: [] };
 
 /**
- * TLZ-561 (D7/D12). Human team members in the call, by the role attribute the dashboard
- * mints into their token. Same predicate as the viewer-permission gate (isStaffParticipant): a known
- * role and not an AGENT or SIP participant.
+ * TLZ-561 (D7/D12). Human team members in the call, by the role attribute Connect mints
+ * into their token. Same predicate as the viewer-consent gate (isStaffParticipant): a known
+ * role with its matching identity prefix, and not an AGENT or SIP participant.
  */
 export function useStaffParticipants() {
   const room = useRoomContext();

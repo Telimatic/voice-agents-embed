@@ -59,6 +59,7 @@ export function fakePublication(displaySurface: string | undefined, trackSid = '
 }
 
 export type FakeParticipant = {
+  sid?: string;
   identity: string;
   kind: ParticipantKind;
   attributes: Record<string, string>;
@@ -76,22 +77,20 @@ export function fakeHuman(identity = 'human-1'): FakeParticipant {
   return { identity, kind: ParticipantKind.STANDARD, attributes: {} };
 }
 
-/** A human team member whose token carries the role attribute; no name omits the name. */
+/**
+ * A rep or observer joined through Connect: a browser participant with `telzino.role` and
+ * the matching identity prefix (`rep-1`, `obs-1`). No name omits the display name.
+ */
 export function staffParticipant(
-  role: string,
+  role = 'rep',
   name?: string,
-  identity = `${role}-${name ?? 'x'}`
+  identity = `${role === 'observer' ? 'obs' : 'rep'}-${name ?? '1'}`
 ): FakeParticipant {
   return {
     identity,
     kind: ParticipantKind.STANDARD,
     attributes: { [ATTR_ROLE]: role, ...(name ? { [ATTR_DISPLAY_NAME]: name } : {}) },
   };
-}
-
-/** A rep or observer joined through the dashboard: a browser participant with `telzino.role`. */
-export function fakeStaff(identity = 'rep-1', role = 'rep'): FakeParticipant {
-  return { identity, kind: ParticipantKind.STANDARD, attributes: { [ATTR_ROLE]: role } };
 }
 
 /** The phone leg of a human transfer: a SIP participant, not staff. */

@@ -98,7 +98,6 @@ export const PopupView = ({
   const {
     canShare,
     shareUnsupported,
-    agentReady,
     agentIdentity,
     consentRequest,
     acceptConsent,
@@ -364,7 +363,7 @@ export const PopupView = ({
               pending: sharePending,
               onPressedChange: handleShareToggle,
             }}
-            onSendPhoto={shareUnsupported && agentReady ? () => setPhotoOpen(true) : undefined}
+            onSendPhoto={shareUnsupported ? () => setPhotoOpen(true) : undefined}
             onSendMessage={onSendMessage}
             onChatOpenChange={setChatOpen}
           />
@@ -386,7 +385,7 @@ export const PopupView = ({
         <ParticipantStrip className={isScreenShareEnabled ? 'top-[4.5rem]' : 'top-2'} />
 
         {/* Photo fallback (TLZ-561, A4): only while an agent is there to receive it. */}
-        {photoOpen && shareUnsupported && agentReady && (
+        {photoOpen && shareUnsupported && (
           <PhotoFallback
             participant={localParticipant}
             agentIdentity={agentIdentity}
@@ -416,10 +415,11 @@ export const PopupView = ({
           <ViewerConsentOverlay
             key={viewerConsentRequest.expiresAt}
             name={viewerConsentRequest.name}
+            role={viewerConsentRequest.role}
             timeoutSeconds={viewerConsentRequest.timeoutSeconds}
             expiresAt={viewerConsentRequest.expiresAt}
-            onAllow={allowViewer}
-            onDeny={denyViewer}
+            onAllow={() => allowViewer(viewerConsentRequest.identity)}
+            onDeny={() => denyViewer(viewerConsentRequest.identity)}
           />
         )}
       </div>

@@ -25,6 +25,11 @@ export const ATTR_ENABLED = 'telzino.screenshare.enabled';
  * predates this key still works.
  */
 export const ATTR_ALLOWED_SURFACES = 'telzino.screenshare.allowed_surfaces';
+/**
+ * Stamped by the token route when this surface renders the display panel, whether or not
+ * the browser can capture. The agent pushes display content and payment cards only on "true".
+ */
+export const ATTR_DISPLAY_CAPABLE = 'telzino.display.capable';
 
 export type ShareSurface = 'browser' | 'window' | 'monitor';
 
@@ -123,7 +128,7 @@ export const RPC_DISPLAY_CLEAR = 'display.clear';
 /** Widget to agent. */
 export const RPC_DISPLAY_NOTIFY = 'display.notify';
 
-/** Minted by the dashboard into rep/observer tokens. */
+/** Minted by Connect (lib/handoff/livekit-grant.ts) into rep/observer tokens. */
 export const ATTR_ROLE = 'telzino.role';
 export const ATTR_DISPLAY_NAME = 'telzino.display_name';
 

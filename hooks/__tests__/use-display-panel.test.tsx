@@ -57,6 +57,7 @@ describe('useDisplayPanel / ContentPanel', () => {
     expect(frame.getAttribute('sandbox')).toBe(
       'allow-scripts allow-forms allow-same-origin allow-popups'
     );
+    expect(frame.getAttribute('referrerpolicy')).toBe('no-referrer');
     const link = screen.getByText('Open in new tab');
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
@@ -117,12 +118,86 @@ describe('useDisplayPanel / ContentPanel', () => {
     expect(screen.queryByTestId('display-panel')).toBeNull();
   });
 
-  it('display.clear hides the panel but keeps Reopen last', async () => {
+  it('display.clear hides the panel and Reopen last', async () => {
     const { push, call } = setup();
     await push({ id: 'a', kind: 'url', url: 'https://example.com/x' });
+    fireEvent.click(screen.getByText('Minimize'));
     expect((await call(RPC_DISPLAY_CLEAR, {})).ok).toBe(true);
     expect(screen.queryByTestId('display-panel')).toBeNull();
-    expect(screen.getByText('Reopen last')).toBeTruthy();
+    expect(screen.queryByText('Reopen last')).toBeNull();
+  });
+
+  it('a closed payment card cannot be reopened, even over an earlier page', async () => {
+    const { push } = setup();
+    await push({ id: 'a', kind: 'url', url: 'https://example.com/x' });
+    await push({ id: 'p', kind: 'payment', url: 'https://pay.example/s' });
+    fireEvent.click(screen.getByText('Pay now'));
+    fireEvent.click(screen.getByText('Close'));
+    expect(screen.queryByText('Reopen last')).toBeNull();
+    expect(screen.queryByText('Pay now')).toBeNull();
+  });
+
+  it('a minimized payment card can still be reopened', async () => {
+    const { push } = setup();
+    await push({ id: 'p', kind: 'payment', url: 'https://pay.example/s' });
+    fireEvent.click(screen.getByText('Minimize'));
+    fireEvent.click(screen.getByText('Reopen last'));
+    expect(screen.getByText('Pay now')).toBeTruthy();
+  });
+
+  it('pdf push: a card with Open in new tab, no iframe', async () => {
+    const { push } = setup();
+    await push({ id: 'd', kind: 'pdf', url: 'https://example.com/a.pdf' });
+    expect(document.querySelector('iframe')).toBeNull();
+    expect(screen.getByText('Open in new tab').getAttribute('href')).toBe(
+      'https://example.com/a.pdf'
+    );
+  });
+
+  it('image push: untitled image gets a generic alt and no referrer', async () => {
+    const { push } = setup();
+    await push({ id: 'i', kind: 'image', url: 'https://example.com/a.png', title: '' });
+    const img = screen.getByAltText('Shared image');
+    expect(img.getAttribute('referrerpolicy')).toBe('no-referrer');
+  });
+
+  it('does not steal focus from the chat input inside the popup shadow root', async () => {
+    const fake = createFakeRoom();
+    fake.remoteParticipants.set('agent-1', fakeAgent('agent-1'));
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = host.attachShadow({ mode: 'open' });
+    const container = document.createElement('div');
+    const input = document.createElement('input');
+    root.append(input, container);
+    render(
+      <RoomContext.Provider value={fake.room as unknown as Room}>
+        <ContentPanel />
+      </RoomContext.Provider>,
+      { container }
+    );
+    input.focus();
+    await act(async () => {
+      await fake.rpcHandlers.get(RPC_DISPLAY_PUSH)!({
+        requestId: 'r',
+        callerIdentity: 'agent-1',
+        payload: JSON.stringify({ v: V, id: 'a', kind: 'url', title: 'T', url: 'https://e.com/x' }),
+        responseTimeout: 5000,
+      });
+    });
+    expect(root.activeElement).toBe(input);
+    host.remove();
+  });
+
+  it('a push does not steal focus from a field the caller is typing in; it is announced', async () => {
+    const { push } = setup();
+    const input = document.createElement('textarea');
+    document.body.appendChild(input);
+    input.focus();
+    await push({ id: 'a', kind: 'url', url: 'https://example.com/x', title: 'Guide' });
+    expect(document.activeElement).toBe(input);
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe('Shared: Guide');
+    input.remove();
   });
 
   it('rejects non-https, malformed JSON and bad highlight payloads with bad_payload', async () => {

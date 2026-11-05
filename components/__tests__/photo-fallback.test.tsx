@@ -106,6 +106,11 @@ describe('PhotoFallback', () => {
     expect(input).toHaveAttribute('accept', 'image/*');
   });
 
+  it('moves focus into itself when opened', () => {
+    const { input } = setup();
+    expect(document.activeElement).toBe(input);
+  });
+
   it('sends a valid image on the photo topic', async () => {
     const { sendFile, pick } = setup();
     const file = new File(['x'], 'a.png', { type: 'image/png' });

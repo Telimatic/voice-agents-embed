@@ -10,7 +10,10 @@ import { cn } from '@/lib/utils';
  */
 export function ParticipantStrip({ className }: { className?: string }) {
   const { reps, observers } = useStaffParticipants();
-  if (reps.length === 0 && observers.length === 0) return null;
+  // The live region stays mounted (empty) so the first join is announced.
+  if (reps.length === 0 && observers.length === 0) {
+    return <div role="status" aria-live="polite" data-testid="participant-strip-empty" />;
+  }
   return (
     <div
       role="status"

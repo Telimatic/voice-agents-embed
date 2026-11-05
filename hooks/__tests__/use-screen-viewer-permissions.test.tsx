@@ -5,7 +5,9 @@ import { RoomContext } from '@livekit/components-react';
 // eslint-disable-next-line import/named
 import { act, renderHook, waitFor } from '@testing-library/react';
 import {
+  type ScreenViewerPermissions,
   type ScreenViewerPermissionsOptions,
+  VIEWER_CONSENT_CLICK_GUARD_MS,
   computePermissions,
   useScreenViewerPermissions,
 } from '@/hooks/use-screen-viewer-permissions';
@@ -25,8 +27,8 @@ import {
   fakeHuman,
   fakePublication,
   fakeSip,
-  fakeStaff,
   holdPicker,
+  staffParticipant,
   stubNavigator,
 } from './fake-room';
 
@@ -41,15 +43,45 @@ const rep = {
 };
 
 describe('computePermissions (spec §6)', () => {
-  it('no screen published: exactly today’s behaviour, staff or not', () => {
+  it('no screen, no staff: exactly today’s behaviour', () => {
     expect(
       computePermissions({
-        remotes: [agent, sip, rep],
-        localTracks: [MIC],
-        grantedIdentities: new Set(['rep-1']),
+        remotes: [agent, sip],
+        localTracks: [MIC, { trackSid: 'TR_cam', source: Track.Source.Camera }],
+        grantedIdentities: new Set(),
         screenSid: null,
       })
     ).toEqual({ allParticipantsAllowed: true, trackPermissions: [] });
+  });
+
+  it('no screen, camera on, staff present: staff get the microphone only (R22)', () => {
+    expect(
+      computePermissions({
+        remotes: [agent, sip, rep],
+        localTracks: [MIC, { trackSid: 'TR_cam', source: Track.Source.Camera }],
+        grantedIdentities: new Set(['rep-1']),
+        screenSid: null,
+      })
+    ).toEqual({
+      allParticipantsAllowed: false,
+      trackPermissions: [
+        { participantIdentity: 'agent-1', allowAll: true },
+        { participantIdentity: 'human-agent-sip', allowAll: true },
+        { participantIdentity: 'rep-1', allowedTrackSids: ['TR_mic'] },
+      ],
+    });
+  });
+
+  it('a role without the staff identity prefix is still restricted (fail closed)', () => {
+    const forged = { ...rep, identity: 'embed_user_1' };
+    expect(
+      computePermissions({
+        remotes: [forged],
+        localTracks: [MIC, SCREEN],
+        grantedIdentities: new Set(),
+        screenSid: 'TR_scr',
+      }).trackPermissions
+    ).toEqual([{ participantIdentity: 'embed_user_1', allowedTrackSids: ['TR_mic'] }]);
   });
 
   it('share live, no staff: still restricted, agent and SIP get everything (R19)', () => {
@@ -177,6 +209,13 @@ function roomWithAgent() {
   return fake;
 }
 
+/** Answers the prompt on screen as the overlay does: after the click guard, by identity. */
+function answerHead(result: { current: ScreenViewerPermissions }, allow: boolean) {
+  act(() => vi.advanceTimersByTime(VIEWER_CONSENT_CLICK_GUARD_MS));
+  const identity = result.current.viewerConsentRequest!.identity;
+  act(() => (allow ? result.current.allowViewer(identity) : result.current.denyViewer(identity)));
+}
+
 const lastCall = (fake: ReturnType<typeof createFakeRoom>) =>
   fake.setTrackSubscriptionPermissions.mock.calls.at(-1);
 
@@ -188,21 +227,28 @@ describe('useScreenViewerPermissions', () => {
     vi.useRealTimers();
   });
 
-  it('applies (true, []) on mount and on every participant connect/disconnect with no share', () => {
+  it('with no share applies (true, []) unless staff are present, then mic only for them', () => {
     const fake = createFakeRoom();
+    fake.publishMic('TR_mic');
     renderViewer(fake.room);
     expect(fake.setTrackSubscriptionPermissions).toHaveBeenCalledTimes(1);
     expect(lastCall(fake)).toEqual([true, []]);
 
     act(() => fake.addParticipant(fakeAgent()));
     act(() => fake.addParticipant(fakeSip()));
-    const staff = fakeStaff();
+    expect(lastCall(fake)).toEqual([true, []]);
+    const staff = staffParticipant();
     act(() => fake.addParticipant(staff));
+    expect(lastCall(fake)).toEqual([
+      false,
+      [
+        { participantIdentity: 'agent-1', allowAll: true },
+        { participantIdentity: 'human-agent-sip', allowAll: true },
+        { participantIdentity: 'rep-1', allowedTrackSids: ['TR_mic'] },
+      ],
+    ]);
     act(() => fake.removeParticipant(staff));
-    expect(fake.setTrackSubscriptionPermissions).toHaveBeenCalledTimes(5);
-    fake.setTrackSubscriptionPermissions.mock.calls.forEach((call) =>
-      expect(call).toEqual([true, []])
-    );
+    expect(lastCall(fake)).toEqual([true, []]);
   });
 
   it('restricts from the moment the screen is published until it is unpublished', () => {
@@ -228,7 +274,7 @@ describe('useScreenViewerPermissions', () => {
     act(() => fake.addParticipant(fakeAgent()));
     renderViewer(fake.room);
 
-    act(() => fake.addParticipant(fakeStaff('rep-1')));
+    act(() => fake.addParticipant(staffParticipant()));
     expect(lastCall(fake)).toEqual([
       false,
       [
@@ -276,14 +322,14 @@ describe('useScreenViewerPermissions', () => {
     const fake = roomWithAgent();
     fake.publishMic('TR_mic');
     fake.publishScreen('TR_scr_1');
-    const staff = fakeStaff('rep-1');
+    const staff = staffParticipant();
     act(() => fake.addParticipant(staff));
     const { result } = renderViewer(fake.room);
     let pending!: Promise<string>;
     act(() => {
       pending = result.current.handleViewerConsent(request());
     });
-    act(() => result.current.allowViewer());
+    answerHead(result, true);
     await pending;
     expect(lastCall(fake)?.[1]).toContainEqual({
       participantIdentity: 'rep-1',
@@ -291,16 +337,46 @@ describe('useScreenViewerPermissions', () => {
     });
 
     act(() => fake.removeParticipant(staff));
-    act(() => fake.addParticipant(fakeStaff('rep-1')));
+    act(() => fake.addParticipant(staffParticipant()));
     expect(lastCall(fake)?.[1]).toContainEqual({
       participantIdentity: 'rep-1',
       allowedTrackSids: ['TR_mic'],
     });
   });
 
+  it.each([RoomEvent.ParticipantActive, RoomEvent.TrackPublished, RoomEvent.TrackUnpublished])(
+    'a rejoin the SDK reports without a disconnect drops the grant (%s)',
+    async (event) => {
+      const fake = roomWithAgent();
+      fake.publishMic('TR_mic');
+      fake.publishScreen('TR_scr_1');
+      const staff = { ...staffParticipant(), sid: 'PA_old' };
+      act(() => fake.addParticipant(staff));
+      const { result } = renderViewer(fake.room);
+      let pending!: Promise<string>;
+      act(() => {
+        pending = result.current.handleViewerConsent(request());
+      });
+      answerHead(result, true);
+      await pending;
+      const granted = { participantIdentity: 'rep-1', allowedTrackSids: ['TR_mic', 'TR_scr_1'] };
+      expect(lastCall(fake)?.[1]).toContainEqual(granted);
+
+      act(() => fake.room.emit(event));
+      expect(lastCall(fake)?.[1]).toContainEqual(granted); // same session keeps its grant
+
+      staff.sid = 'PA_new'; // the SDK updates the participant it already has
+      act(() => fake.room.emit(event));
+      expect(lastCall(fake)?.[1]).toContainEqual({
+        participantIdentity: 'rep-1',
+        allowedTrackSids: ['TR_mic'],
+      });
+    }
+  );
+
   it('no live share: answers no_share immediately, no prompt', async () => {
     const fake = roomWithAgent();
-    act(() => fake.addParticipant(fakeStaff('rep-1')));
+    act(() => fake.addParticipant(staffParticipant()));
     const { result } = renderViewer(fake.room);
     const answer = await result.current.handleViewerConsent(request());
     expect(JSON.parse(answer)).toEqual({ v: SCREENSHARE_PROTOCOL_VERSION, outcome: 'no_share' });
@@ -321,10 +397,10 @@ describe('useScreenViewerPermissions', () => {
     const fake = roomWithAgent();
     fake.publishMic('TR_mic');
     fake.publishScreen('TR_scr_1');
-    const staff = fakeStaff('rep-1');
+    const staff = staffParticipant();
     staff.attributes[ATTR_DISPLAY_NAME] = 'Dana from Support';
     act(() => fake.addParticipant(staff));
-    act(() => fake.addParticipant(fakeStaff('obs-1', 'observer')));
+    act(() => fake.addParticipant(staffParticipant('observer')));
     const { result } = renderViewer(fake.room);
 
     let pending!: Promise<string>;
@@ -338,7 +414,7 @@ describe('useScreenViewerPermissions', () => {
       timeoutSeconds: VIEWER_CONSENT_TIMEOUT_S,
     });
 
-    act(() => result.current.allowViewer());
+    answerHead(result, true);
     expect(JSON.parse(await pending)).toEqual({ v: 1, outcome: 'granted' });
     expect(result.current.viewerConsentRequest).toBeNull();
     expect(lastCall(fake)).toEqual([
@@ -355,14 +431,14 @@ describe('useScreenViewerPermissions', () => {
     const fake = roomWithAgent();
     fake.publishMic('TR_mic');
     fake.publishScreen('TR_scr_1');
-    act(() => fake.addParticipant(fakeStaff('rep-1')));
+    act(() => fake.addParticipant(staffParticipant()));
     const { result } = renderViewer(fake.room);
 
     let pending!: Promise<string>;
     act(() => {
       pending = result.current.handleViewerConsent(request());
     });
-    act(() => result.current.allowViewer());
+    answerHead(result, true);
     await pending;
     expect(lastCall(fake)?.[1]).toContainEqual({
       participantIdentity: 'rep-1',
@@ -382,13 +458,13 @@ describe('useScreenViewerPermissions', () => {
   it('don’t allow answers declined and opens nothing', async () => {
     const fake = roomWithAgent();
     fake.publishScreen('TR_scr_1');
-    act(() => fake.addParticipant(fakeStaff('rep-1')));
+    act(() => fake.addParticipant(staffParticipant()));
     const { result } = renderViewer(fake.room);
     let pending!: Promise<string>;
     act(() => {
       pending = result.current.handleViewerConsent(request());
     });
-    act(() => result.current.denyViewer());
+    answerHead(result, false);
     expect(JSON.parse(await pending).outcome).toBe('declined');
     expect(lastCall(fake)?.[1]).toContainEqual({
       participantIdentity: 'rep-1',
@@ -399,7 +475,7 @@ describe('useScreenViewerPermissions', () => {
   it('times out after 30 s with `timeout`', async () => {
     const fake = roomWithAgent();
     fake.publishScreen('TR_scr_1');
-    act(() => fake.addParticipant(fakeStaff('rep-1')));
+    act(() => fake.addParticipant(staffParticipant()));
     const { result } = renderViewer(fake.room);
     let pending!: Promise<string>;
     act(() => {
@@ -415,7 +491,7 @@ describe('useScreenViewerPermissions', () => {
   it('the share ending while the prompt is open answers no_share', async () => {
     const fake = roomWithAgent();
     fake.publishScreen('TR_scr_1');
-    act(() => fake.addParticipant(fakeStaff('rep-1')));
+    act(() => fake.addParticipant(staffParticipant()));
     const { result } = renderViewer(fake.room);
     let pending!: Promise<string>;
     act(() => {
@@ -430,14 +506,14 @@ describe('useScreenViewerPermissions', () => {
     const fake = roomWithAgent();
     fake.publishMic('TR_mic');
     fake.publishScreen('TR_scr_1');
-    act(() => fake.addParticipant(fakeStaff('rep-1')));
+    act(() => fake.addParticipant(staffParticipant()));
     const { result } = renderViewer(fake.room);
     for (const callerIdentity of ['rep-1', 'nobody-here']) {
       const answer = await result.current.handleViewerConsent({ ...request(), callerIdentity });
       expect(JSON.parse(answer)).toEqual({ v: 1, outcome: 'declined' });
     }
     expect(result.current.viewerConsentRequest).toBeNull();
-    act(() => result.current.allowViewer());
+    act(() => result.current.allowViewer('rep-1'));
     expect(lastCall(fake)?.[1]).toContainEqual({
       participantIdentity: 'rep-1',
       allowedTrackSids: ['TR_mic'],
@@ -460,7 +536,7 @@ describe('useScreenViewerPermissions', () => {
   it('a repeat request for the same person joins the pending prompt instead of queueing', async () => {
     const fake = roomWithAgent();
     fake.publishScreen('TR_scr_1');
-    act(() => fake.addParticipant(fakeStaff('rep-1')));
+    act(() => fake.addParticipant(staffParticipant()));
     const { result } = renderViewer(fake.room);
     let first!: Promise<string>;
     let second!: Promise<string>;
@@ -470,7 +546,7 @@ describe('useScreenViewerPermissions', () => {
     await act(async () => {
       second = result.current.handleViewerConsent(request());
     });
-    act(() => result.current.allowViewer());
+    answerHead(result, true);
     expect(JSON.parse(await first).outcome).toBe('granted');
     expect(JSON.parse(await second).outcome).toBe('granted');
     expect(result.current.viewerConsentRequest).toBeNull();
@@ -479,8 +555,8 @@ describe('useScreenViewerPermissions', () => {
   it('two requests queue: the second is shown after the first is answered', async () => {
     const fake = roomWithAgent();
     fake.publishScreen('TR_scr_1');
-    act(() => fake.addParticipant(fakeStaff('rep-1')));
-    act(() => fake.addParticipant(fakeStaff('obs-1', 'observer')));
+    act(() => fake.addParticipant(staffParticipant()));
+    act(() => fake.addParticipant(staffParticipant('observer')));
     const { result } = renderViewer(fake.room);
     let first!: Promise<string>;
     let second!: Promise<string>;
@@ -489,11 +565,164 @@ describe('useScreenViewerPermissions', () => {
       second = result.current.handleViewerConsent(request('obs-1', 'Sam'));
     });
     expect(result.current.viewerConsentRequest?.identity).toBe('rep-1');
-    act(() => result.current.denyViewer());
+    answerHead(result, false);
     expect(result.current.viewerConsentRequest?.identity).toBe('obs-1');
-    act(() => result.current.allowViewer());
+    answerHead(result, true);
     expect(JSON.parse(await first).outcome).toBe('declined');
     expect(JSON.parse(await second).outcome).toBe('granted');
+  });
+
+  it('a queued prompt gets its full 30 s from when it is shown, not from when it was asked', async () => {
+    const fake = roomWithAgent();
+    fake.publishScreen('TR_scr_1');
+    act(() => fake.addParticipant(staffParticipant()));
+    act(() => fake.addParticipant(staffParticipant('observer')));
+    const { result } = renderViewer(fake.room);
+    let second!: Promise<string>;
+    act(() => {
+      void result.current.handleViewerConsent(request('rep-1', 'Dana'));
+      second = result.current.handleViewerConsent(request('obs-1', 'Sam'));
+    });
+    act(() => vi.advanceTimersByTime(20_000));
+    answerHead(result, false);
+    expect(result.current.viewerConsentRequest).toMatchObject({
+      identity: 'obs-1',
+      expiresAt: Date.now() + VIEWER_CONSENT_TIMEOUT_S * 1000,
+    });
+    act(() => vi.advanceTimersByTime(VIEWER_CONSENT_TIMEOUT_S * 1000 - 1));
+    expect(result.current.viewerConsentRequest?.identity).toBe('obs-1');
+    act(() => vi.advanceTimersByTime(1));
+    expect(JSON.parse(await second).outcome).toBe('timeout');
+  });
+
+  it('a double click across two queued prompts answers only the first', async () => {
+    const fake = roomWithAgent();
+    fake.publishScreen('TR_scr_1');
+    act(() => fake.addParticipant(staffParticipant()));
+    act(() => fake.addParticipant(staffParticipant('observer')));
+    const { result } = renderViewer(fake.room);
+    let first!: Promise<string>;
+    act(() => {
+      first = result.current.handleViewerConsent(request('rep-1', 'Dana'));
+      void result.current.handleViewerConsent(request('obs-1', 'Sam'));
+    });
+    act(() => vi.advanceTimersByTime(VIEWER_CONSENT_CLICK_GUARD_MS));
+    // The overlay's Allow is bound to the prompt it was rendered for.
+    const allowShown = () =>
+      result.current.allowViewer(result.current.viewerConsentRequest!.identity);
+    act(allowShown);
+    act(allowShown); // second click of the double tap, now over Sam's prompt
+    expect(JSON.parse(await first).outcome).toBe('granted');
+    expect(result.current.viewerConsentRequest?.identity).toBe('obs-1');
+    // A stale click for the answered prompt never reaches the next one either.
+    act(() => vi.advanceTimersByTime(VIEWER_CONSENT_CLICK_GUARD_MS));
+    act(() => result.current.allowViewer('rep-1'));
+    expect(result.current.viewerConsentRequest?.identity).toBe('obs-1');
+    expect(lastCall(fake)?.[1]).toContainEqual({
+      participantIdentity: 'obs-1',
+      allowedTrackSids: [],
+    });
+  });
+
+  it('every queued prompt gets its full 30 s once shown; all three are shown', async () => {
+    const fake = roomWithAgent();
+    fake.publishScreen('TR_scr_1');
+    act(() => fake.addParticipant(staffParticipant()));
+    act(() => fake.addParticipant(staffParticipant('observer')));
+    act(() => fake.addParticipant(staffParticipant('rep', 'Lee', 'rep-3')));
+    const { result } = renderViewer(fake.room);
+    const outcomes: Record<string, string> = {};
+    act(() => {
+      for (const id of ['rep-1', 'obs-1', 'rep-3']) {
+        void result.current
+          .handleViewerConsent(request(id))
+          .then((a) => (outcomes[id] = JSON.parse(a).outcome));
+      }
+    });
+    for (const id of ['rep-1', 'obs-1', 'rep-3']) {
+      expect(result.current.viewerConsentRequest).toMatchObject({
+        identity: id,
+        timeoutSeconds: VIEWER_CONSENT_TIMEOUT_S,
+        expiresAt: Date.now() + VIEWER_CONSENT_TIMEOUT_S * 1000,
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(VIEWER_CONSENT_TIMEOUT_S * 1000 - 1));
+      expect(outcomes[id]).toBeUndefined(); // still open 1 ms before its own 30 s
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+    }
+    expect(outcomes).toEqual({ 'rep-1': 'timeout', 'obs-1': 'timeout', 'rep-3': 'timeout' });
+    expect(result.current.viewerConsentRequest).toBeNull();
+  });
+
+  it('the asked person leaving closes their prompt as declined; the next gets its full 30 s', async () => {
+    const fake = roomWithAgent();
+    fake.publishScreen('TR_scr_1');
+    const leaver = staffParticipant();
+    act(() => fake.addParticipant(leaver));
+    act(() => fake.addParticipant(staffParticipant('observer')));
+    const { result } = renderViewer(fake.room);
+    let first!: Promise<string>;
+    let second!: Promise<string>;
+    act(() => {
+      first = result.current.handleViewerConsent(request('rep-1'));
+      second = result.current.handleViewerConsent(request('obs-1'));
+    });
+    act(() => vi.advanceTimersByTime(10_000));
+    act(() => fake.removeParticipant(leaver));
+    expect(JSON.parse(await first).outcome).toBe('declined');
+    expect(result.current.viewerConsentRequest).toMatchObject({
+      identity: 'obs-1',
+      expiresAt: Date.now() + VIEWER_CONSENT_TIMEOUT_S * 1000,
+    });
+    // A late Allow for the person who left grants nothing.
+    act(() => result.current.allowViewer('rep-1'));
+    expect(lastCall(fake)?.[1]).not.toContainEqual(
+      expect.objectContaining({ participantIdentity: 'rep-1' })
+    );
+    answerHead(result, false);
+    expect(JSON.parse(await second).outcome).toBe('declined');
+  });
+
+  it('a queued (not yet shown) person leaving is dropped from the queue', async () => {
+    const fake = roomWithAgent();
+    fake.publishScreen('TR_scr_1');
+    act(() => fake.addParticipant(staffParticipant()));
+    const leaver = staffParticipant('observer');
+    act(() => fake.addParticipant(leaver));
+    const { result } = renderViewer(fake.room);
+    let queued!: Promise<string>;
+    act(() => {
+      void result.current.handleViewerConsent(request('rep-1'));
+      queued = result.current.handleViewerConsent(request('obs-1'));
+    });
+    act(() => fake.removeParticipant(leaver));
+    expect(JSON.parse(await queued).outcome).toBe('declined');
+    expect(result.current.viewerConsentRequest?.identity).toBe('rep-1');
+    act(() => vi.advanceTimersByTime(VIEWER_CONSENT_TIMEOUT_S * 1000));
+    expect(result.current.viewerConsentRequest).toBeNull(); // obs-1 is never shown
+  });
+
+  it('the prompt shows the role Connect minted, not the one in the request', async () => {
+    const fake = roomWithAgent();
+    fake.publishScreen('TR_scr_1');
+    act(() => fake.addParticipant(staffParticipant('observer')));
+    const { result } = renderViewer(fake.room);
+    act(() => {
+      void result.current.handleViewerConsent(request('obs-1')); // payload says role: 'rep'
+    });
+    expect(result.current.viewerConsentRequest?.role).toBe('observer');
+  });
+
+  it('a role whose identity lacks the matching staff prefix is declined, unprompted (C2)', async () => {
+    const fake = roomWithAgent();
+    fake.publishScreen('TR_scr_1');
+    act(() => fake.addParticipant(staffParticipant('rep', undefined, 'embed_user_1')));
+    act(() => fake.addParticipant(staffParticipant('observer', undefined, 'rep-2')));
+    const { result } = renderViewer(fake.room);
+    for (const identity of ['embed_user_1', 'rep-2']) {
+      const answer = await result.current.handleViewerConsent(request(identity));
+      expect(JSON.parse(answer).outcome).toBe('declined');
+    }
+    expect(result.current.viewerConsentRequest).toBeNull();
   });
 });
 
@@ -531,14 +760,16 @@ describe('useScreenshareSession wiring', () => {
     vi.unstubAllGlobals();
   });
 
-  /** Staff and agent present, share permitted: the moment the screen is requested. */
-  function sessionWithStaff() {
+  /**
+   * Agent present, no staff yet (with staff the list is restricted anyway), share permitted:
+   * the moment the screen is requested.
+   */
+  function sessionWithAgent() {
     stubNavigator({ capable: true });
     const fake = createFakeRoom();
     fake.grantScreenShare();
     fake.publishMic('TR_mic');
     fake.addParticipant(fakeAgent('agent-1'));
-    fake.addParticipant(fakeStaff('rep-1'));
     const wrapper = ({ children }: { children: ReactNode }) => (
       <RoomContext.Provider value={fake.room as unknown as Room}>{children}</RoomContext.Provider>
     );
@@ -546,13 +777,7 @@ describe('useScreenshareSession wiring', () => {
     return { fake, hook };
   }
 
-  const RESTRICTED = [
-    false,
-    [
-      { participantIdentity: 'agent-1', allowAll: true },
-      { participantIdentity: 'rep-1', allowedTrackSids: ['TR_mic'] },
-    ],
-  ];
+  const RESTRICTED = [false, [{ participantIdentity: 'agent-1', allowAll: true }]];
 
   /** The restricted call must come strictly before the publish request. */
   function expectRestrictedBeforePublish(fake: ReturnType<typeof createFakeRoom>) {
@@ -565,7 +790,7 @@ describe('useScreenshareSession wiring', () => {
   }
 
   it('caller-initiated share: restricted before setScreenShareEnabled(true)', async () => {
-    const { fake, hook } = sessionWithStaff();
+    const { fake, hook } = sessionWithAgent();
     expect(lastCall(fake)).toEqual([true, []]);
     await act(async () => {
       await hook.result.current.startShare();
@@ -575,7 +800,7 @@ describe('useScreenshareSession wiring', () => {
   });
 
   it('agent-requested share: restricted before setScreenShareEnabled(true)', async () => {
-    const { fake, hook } = sessionWithStaff();
+    const { fake, hook } = sessionWithAgent();
     const rpc = fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!({
       requestId: 'r',
       callerIdentity: 'agent-1',
@@ -597,7 +822,7 @@ describe('useScreenshareSession wiring', () => {
   });
 
   it('a picker that publishes nothing restores (true, [])', async () => {
-    const { fake, hook } = sessionWithStaff();
+    const { fake, hook } = sessionWithAgent();
     fake.setScreenShareEnabled.mockImplementationOnce(async () => {
       throw Object.assign(new Error('dismissed'), { name: 'NotAllowedError' });
     });
@@ -609,7 +834,7 @@ describe('useScreenshareSession wiring', () => {
   });
 
   it('stays restricted while the picker is open: a staff join and a mic publish do not reopen it', async () => {
-    const { fake, hook } = sessionWithStaff();
+    const { fake, hook } = sessionWithAgent();
     const picker = holdPicker(fake);
     let share!: Promise<unknown>;
     act(() => {
@@ -617,12 +842,11 @@ describe('useScreenshareSession wiring', () => {
     });
     expect(lastCall(fake)).toEqual(RESTRICTED);
 
-    act(() => fake.addParticipant(fakeStaff('obs-1', 'observer')));
+    act(() => fake.addParticipant(staffParticipant('observer')));
     expect(lastCall(fake)).toEqual([
       false,
       [
         { participantIdentity: 'agent-1', allowAll: true },
-        { participantIdentity: 'rep-1', allowedTrackSids: ['TR_mic'] },
         { participantIdentity: 'obs-1', allowedTrackSids: ['TR_mic'] },
       ],
     ]);
@@ -650,8 +874,8 @@ describe('useScreenshareSession wiring', () => {
     vi.unstubAllGlobals();
   });
 
-  it('cancelling the open picker returns to (true, [])', async () => {
-    const { fake, hook } = sessionWithStaff();
+  it('cancelling the open picker lifts the start restriction; a staff joiner keeps mic only', async () => {
+    const { fake, hook } = sessionWithAgent();
     fake.setScreenShareEnabled.mockImplementationOnce(
       () =>
         new Promise((_, reject) =>
@@ -662,17 +886,23 @@ describe('useScreenshareSession wiring', () => {
     act(() => {
       share = hook.result.current.startShare();
     });
-    act(() => fake.addParticipant(fakeStaff('obs-1', 'observer')));
+    act(() => fake.addParticipant(staffParticipant('observer')));
     expect(lastCall(fake)?.[0]).toBe(false);
     await act(async () => {
       await share;
     });
-    expect(lastCall(fake)).toEqual([true, []]);
+    expect(lastCall(fake)).toEqual([
+      false,
+      [
+        { participantIdentity: 'agent-1', allowAll: true },
+        { participantIdentity: 'obs-1', allowedTrackSids: ['TR_mic'] },
+      ],
+    ]);
     vi.unstubAllGlobals();
   });
 
   it('overlapping starts: the first one ending does not lift the restriction of the second', async () => {
-    const { fake, hook } = sessionWithStaff();
+    const { fake, hook } = sessionWithAgent();
     const first = holdPicker(fake);
     let a!: Promise<unknown>;
     act(() => {
@@ -699,7 +929,7 @@ describe('useScreenshareSession wiring', () => {
   });
 
   it('if the restriction is refused synchronously, no picker opens', async () => {
-    const { fake, hook } = sessionWithStaff();
+    const { fake, hook } = sessionWithAgent();
     vi.spyOn(console, 'error').mockImplementation(() => {});
     fake.setTrackSubscriptionPermissions.mockImplementationOnce(() => {
       throw new Error('refused');

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { AccessToken, type AccessTokenOptions, type VideoGrant } from 'livekit-server-sdk';
 import { RoomConfiguration, TrackSource } from '@livekit/protocol';
 import { ATTR_CLIENT_IP, clientIpFromHeaders } from '@/lib/client-ip';
-import { ATTR_CAPABLE } from '@/lib/screenshare-protocol';
+import { ATTR_CAPABLE, ATTR_DISPLAY_CAPABLE } from '@/lib/screenshare-protocol';
 
 // NOTE: you are expected to define the following environment variables in `.env.local`:
 const API_KEY = process.env.LIVEKIT_API_KEY;
@@ -42,6 +42,8 @@ export async function POST(req: Request) {
     // Reported by the client and stamped into the token below rather than written by the
     // participant after joining — see createParticipantToken.
     const capable: boolean = body?.capable === true;
+    // TLZ-561: this surface renders the display panel; independent of screen capture.
+    const displayCapable: boolean = body?.displayCapable === true;
     // TLZ-706: the visitor's public IP, from Cloudflare's own header (lib/client-ip.ts).
     // Stamped into the token like `capable`, so the browser cannot change it after joining.
     const clientIp = clientIpFromHeaders(req.headers);
@@ -58,6 +60,7 @@ export async function POST(req: Request) {
       { identity: participantIdentity, name: participantName },
       roomName,
       capable,
+      displayCapable,
       clientIp,
       agentName
     );
@@ -100,6 +103,7 @@ function createParticipantToken(
   userInfo: AccessTokenOptions,
   roomName: string,
   capable: boolean,
+  displayCapable: boolean,
   clientIp: string | null,
   agentName?: string
 ): Promise<string> {
@@ -125,6 +129,7 @@ function createParticipantToken(
     // which did not consider this vector.
     attributes: {
       [ATTR_CAPABLE]: capable ? 'true' : 'false',
+      [ATTR_DISPLAY_CAPABLE]: displayCapable ? 'true' : 'false',
       // TLZ-706: only when an IP was found; the worker then records plain `web`.
       ...(clientIp ? { [ATTR_CLIENT_IP]: clientIp } : {}),
     },

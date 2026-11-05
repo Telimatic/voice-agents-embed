@@ -47,14 +47,31 @@ export interface TrackPermission {
 }
 
 /**
- * A human staff member (role minted into their token by the dashboard). Any kind other
- * than the agent or the SIP leg counts, so an unexpected kind is restricted, not trusted.
+ * Carries a staff role (minted into the token by Connect, lib/handoff/livekit-grant.ts).
+ * Any kind other than the agent or the SIP leg counts, so an unexpected kind is restricted,
+ * not trusted. This alone decides who is RESTRICTED: fail closed.
  */
-export function isStaffParticipant(participant: RemoteLike): boolean {
+function hasStaffRole(participant: RemoteLike): boolean {
   return (
     participant.kind !== ParticipantKind.AGENT &&
     participant.kind !== ParticipantKind.SIP &&
     (VIEWER_ROLES as readonly string[]).includes(participant.attributes?.[ATTR_ROLE] ?? '')
+  );
+}
+
+/** Connect mints staff identities as `rep-<8hex>` / `obs-<8hex>`; the worker requires the same. */
+const STAFF_IDENTITY_PREFIX: Record<ViewerRole, string> = { rep: 'rep-', observer: 'obs-' };
+
+/**
+ * A human staff member: the role AND the matching identity prefix, the worker's rule. This
+ * decides who is TRUSTED as staff (consent prompt, team strip), so it must not be fakeable.
+ */
+export function isStaffParticipant(participant: RemoteLike): boolean {
+  return (
+    hasStaffRole(participant) &&
+    participant.identity.startsWith(
+      STAFF_IDENTITY_PREFIX[participant.attributes?.[ATTR_ROLE] as ViewerRole]
+    )
   );
 }
 
@@ -64,9 +81,10 @@ const SCREEN_SOURCES: readonly Track.Source[] = [
 ];
 
 /**
- * Spec §6 as ruled (R19), pure. While a screen track is live the list is ALWAYS
+ * Spec §6 as ruled (R19, R22), pure. While a screen track is live the list is ALWAYS
  * restricted, staff present or not, so someone who joins mid-share is never let in by
- * default before the widget hears they joined. With no screen there is nothing to hide.
+ * default before the widget hears they joined. With no screen it is restricted whenever
+ * staff are present (they get the microphone, not the camera); with neither, allow all.
  */
 export function computePermissions({
   remotes,
@@ -79,7 +97,7 @@ export function computePermissions({
   grantedIdentities: ReadonlySet<string>;
   screenSid: string | null;
 }): { allParticipantsAllowed: boolean; trackPermissions: TrackPermission[] } {
-  if (!screenSid) {
+  if (!screenSid && !remotes.some(hasStaffRole)) {
     return { allParticipantsAllowed: true, trackPermissions: [] };
   }
   const sidsOf = (sources: readonly Track.Source[]) =>
@@ -92,7 +110,7 @@ export function computePermissions({
   return {
     allParticipantsAllowed: false,
     trackPermissions: remotes.map((remote) =>
-      !isStaffParticipant(remote)
+      !hasStaffRole(remote)
         ? { participantIdentity: remote.identity, allowAll: true }
         : {
             participantIdentity: remote.identity,
@@ -116,14 +134,40 @@ type PendingViewer = {
   screenSid: string;
   /** Everyone waiting on this answer: a repeat request for the same person joins it. */
   waiters: ((outcome: ViewerConsentOutcome) => void)[];
-  timer: ReturnType<typeof setTimeout>;
+  /** When it reached the head of the queue; answers in the first moment are ignored. */
+  shownAt?: number;
+  /** Started when the prompt reaches the head of the queue, not when it was asked. */
+  timer?: ReturnType<typeof setTimeout>;
 };
+
+/** A double tap's second click must not land on the next prompt's button in the same place. */
+export const VIEWER_CONSENT_CLICK_GUARD_MS = 500;
+
+/**
+ * The head prompt, its countdown started the first time it is shown: always the full 30 s,
+ * however long it waited in the queue (the caller is promised 30 s to answer).
+ */
+function showHead(
+  queue: PendingViewer[],
+  onTimeout: (entry: PendingViewer, outcome: ViewerConsentOutcome) => void
+): ViewerConsentPrompt | null {
+  const head = queue[0];
+  if (head && !head.timer) {
+    const now = Date.now();
+    const ms = VIEWER_CONSENT_TIMEOUT_S * 1000;
+    head.shownAt = now;
+    head.prompt = { ...head.prompt, expiresAt: now + ms };
+    head.timer = setTimeout(() => onTimeout(head, 'timeout'), ms);
+  }
+  return head?.prompt ?? null;
+}
 
 export interface ScreenViewerPermissions {
   /** The request at the head of the queue, or null. */
   viewerConsentRequest: ViewerConsentPrompt | null;
-  allowViewer: () => void;
-  denyViewer: () => void;
+  /** Answers the head prompt only if it is still this person's (the overlay passes it). */
+  allowViewer: (identity: string) => void;
+  denyViewer: (identity: string) => void;
   /**
    * Call immediately BEFORE asking the SDK to publish a screen: restricts staff to the
    * microphone so the new screen sid is in no staff member's list while it negotiates.
@@ -153,10 +197,16 @@ export function useScreenViewerPermissions(
   const [viewerConsentRequest, setViewerConsentRequest] = useState<ViewerConsentPrompt | null>(
     null
   );
-  /** Grants belong to one screen track: a new share (new sid) starts with none. */
-  const grantsRef = useRef<{ screenSid: string | null; identities: Set<string> }>({
+  /**
+   * Grants belong to one screen track (a new share starts with none) and to one session of
+   * the viewer: identity -> participant sid when they said yes.
+   */
+  const grantsRef = useRef<{
+    screenSid: string | null;
+    identities: Map<string, string | undefined>;
+  }>({
     screenSid: null,
-    identities: new Set(),
+    identities: new Map(),
   });
   const queueRef = useRef<PendingViewer[]>([]);
 
@@ -165,7 +215,7 @@ export function useScreenViewerPermissions(
     [room]
   );
 
-  const finish = useCallback((entry: PendingViewer, outcome: ViewerConsentOutcome) => {
+  const finish = useCallback(function finish(entry: PendingViewer, outcome: ViewerConsentOutcome) {
     const index = queueRef.current.indexOf(entry);
     if (index < 0) {
       return;
@@ -173,7 +223,7 @@ export function useScreenViewerPermissions(
     queueRef.current.splice(index, 1);
     clearTimeout(entry.timer);
     entry.waiters.forEach((resolve) => resolve(outcome));
-    setViewerConsentRequest(queueRef.current[0]?.prompt ?? null);
+    setViewerConsentRequest(showHead(queueRef.current, finish));
   }, []);
 
   /**
@@ -188,7 +238,7 @@ export function useScreenViewerPermissions(
       computePermissions({
         remotes: Array.from(room.remoteParticipants.values()),
         localTracks: Array.from(room.localParticipant.trackPublications.values()),
-        grantedIdentities: grantsRef.current.identities,
+        grantedIdentities: new Set(grantsRef.current.identities.keys()),
         // Not a real sid: no screen yet, but the list must already be restricted.
         screenSid: screenSid ?? (startingRef.current > 0 ? 'pre-publish' : null),
       }),
@@ -198,12 +248,19 @@ export function useScreenViewerPermissions(
   const apply = useCallback(() => {
     const screenSid = screenSidNow();
     if (grantsRef.current.screenSid !== screenSid) {
-      grantsRef.current = { screenSid, identities: new Set() };
+      grantsRef.current = { screenSid, identities: new Map() };
       // A question about a share that has ended has only one true answer.
       queueRef.current
         .filter((entry) => entry.screenSid !== screenSid)
         .forEach((entry) => finish(entry, 'no_share'));
     }
+    // A quick rejoin can reach the SDK as an update to the old participant, with no disconnect
+    // event: only the changed sid shows it. A new session is asked again.
+    grantsRef.current.identities.forEach((sid, identity) => {
+      if (room.remoteParticipants.get(identity)?.sid !== sid) {
+        grantsRef.current.identities.delete(identity);
+      }
+    });
     const { allParticipantsAllowed, trackPermissions } = currentPermissions(screenSid);
     try {
       room.localParticipant.setTrackSubscriptionPermissions(
@@ -226,15 +283,24 @@ export function useScreenViewerPermissions(
       return;
     }
     apply();
-    // Leaving ends a grant: someone who rejoins mid-share is asked again.
+    // Leaving ends a grant: someone who rejoins mid-share is asked again. It also ends any
+    // question about them: the prompt closes, and the agent gets the same 'declined' as for
+    // anyone not in the room. finish() then shows the next prompt with its full 30 s.
     const onDisconnected = (participant: { identity: string }) => {
       grantsRef.current.identities.delete(participant.identity);
+      queueRef.current
+        .filter((entry) => entry.prompt.identity === participant.identity)
+        .forEach((entry) => finish(entry, 'declined'));
       apply();
     };
     room.on(RoomEvent.ParticipantDisconnected, onDisconnected);
     const events = [
       RoomEvent.ParticipantConnected,
       RoomEvent.ParticipantAttributesChanged,
+      // The only events a rejoin without a disconnect is sure to raise (see apply).
+      RoomEvent.ParticipantActive,
+      RoomEvent.TrackPublished,
+      RoomEvent.TrackUnpublished,
       RoomEvent.LocalTrackPublished,
       RoomEvent.LocalTrackUnpublished,
     ] as const;
@@ -243,7 +309,7 @@ export function useScreenViewerPermissions(
       room.off(RoomEvent.ParticipantDisconnected, onDisconnected);
       events.forEach((event) => room.off(event, apply));
     };
-  }, [room, apply]);
+  }, [room, apply, finish]);
 
   // The panel closing leaves no share to see; nobody is left waiting on a dead prompt.
   useEffect(
@@ -254,20 +320,28 @@ export function useScreenViewerPermissions(
   );
 
   const answer = useCallback(
-    (allowed: boolean) => {
+    (allowed: boolean, identity: string) => {
       const entry = queueRef.current[0];
-      if (!entry) {
+      // A click meant for a prompt that has gone, or one landing just as the next appears.
+      if (
+        !entry ||
+        entry.prompt.identity !== identity ||
+        Date.now() - (entry.shownAt ?? 0) < VIEWER_CONSENT_CLICK_GUARD_MS
+      ) {
         return;
       }
       if (allowed && grantsRef.current.screenSid === entry.screenSid) {
-        grantsRef.current.identities.add(entry.prompt.identity);
+        grantsRef.current.identities.set(
+          entry.prompt.identity,
+          room.remoteParticipants.get(entry.prompt.identity)?.sid
+        );
       }
       finish(entry, allowed ? 'granted' : 'declined');
       if (allowed) {
         apply();
       }
     },
-    [apply, finish]
+    [apply, finish, room]
   );
 
   const handleViewerConsent = useCallback(
@@ -310,7 +384,9 @@ export function useScreenViewerPermissions(
       // Make sure grants are keyed to this share before one can be added to it.
       apply();
 
-      const { identity, name, role } = payload.viewer;
+      const { identity, name } = payload.viewer;
+      // The role the caller sees is the one Connect minted, like the name.
+      const role = viewer.attributes?.[ATTR_ROLE] as ViewerRole;
       const already = queueRef.current.find(
         (entry) => entry.prompt.identity === identity && entry.screenSid === screenSid
       );
@@ -319,7 +395,7 @@ export function useScreenViewerPermissions(
           already.waiters.push((outcome) => resolve(respond(outcome)));
         });
       }
-      // The name the dashboard minted into the person's token is the one the caller sees.
+      // The name Connect minted into the person's token is the one the caller sees.
       const shownName = viewer.attributes?.[ATTR_DISPLAY_NAME]?.trim() || name.trim();
       return new Promise<string>((resolve) => {
         const entry: PendingViewer = {
@@ -328,14 +404,13 @@ export function useScreenViewerPermissions(
             name: shownName,
             role,
             timeoutSeconds: VIEWER_CONSENT_TIMEOUT_S,
-            expiresAt: Date.now() + VIEWER_CONSENT_TIMEOUT_S * 1000,
+            expiresAt: 0, // set by showHead
           },
           screenSid,
           waiters: [(outcome) => resolve(respond(outcome))],
-          timer: setTimeout(() => finish(entry, 'timeout'), VIEWER_CONSENT_TIMEOUT_S * 1000),
         };
         queueRef.current.push(entry);
-        setViewerConsentRequest(queueRef.current[0].prompt);
+        setViewerConsentRequest(showHead(queueRef.current, finish));
       });
     },
     [apply, finish, room, screenSidNow]
@@ -358,8 +433,8 @@ export function useScreenViewerPermissions(
     viewerConsentRequest,
     restrictBeforeShare,
     shareStartEnded,
-    allowViewer: useCallback(() => answer(true), [answer]),
-    denyViewer: useCallback(() => answer(false), [answer]),
+    allowViewer: useCallback((identity: string) => answer(true, identity), [answer]),
+    denyViewer: useCallback((identity: string) => answer(false, identity), [answer]),
     handleViewerConsent,
   };
 }

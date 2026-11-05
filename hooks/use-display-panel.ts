@@ -30,7 +30,10 @@ interface State {
   item: DisplayPushPayload | null;
   highlight: PanelHighlight | null;
   mode: PanelMode;
-  /** Survives close/minimize/clear so "Reopen last" works until disconnect. */
+  /**
+   * Survives close/minimize so "Reopen last" works until disconnect. Never a payment card
+   * (a dismissed or paid one must not be payable again) and dropped by display.clear.
+   */
   last: DisplayPushPayload | null;
 }
 
@@ -86,7 +89,12 @@ export function useDisplayPanel(room: Room | undefined) {
       if (!isDisplayPushPayload(payload)) return BAD();
       agentRef.current = data.callerIdentity;
       // A new push replaces the content and drops any highlight.
-      update({ item: payload, highlight: null, mode: 'open', last: payload });
+      update({
+        item: payload,
+        highlight: null,
+        mode: 'open',
+        last: payload.kind === 'payment' ? null : payload,
+      });
       return reply({ ok: true });
     };
 
@@ -108,7 +116,7 @@ export function useDisplayPanel(room: Room | undefined) {
     const onClear = async (data: RpcInvocationData) => {
       if (!fromAgent(data)) return BAD();
       if (!isDisplayClearPayload(parse(data.payload))) return BAD();
-      update({ ...ref.current, item: null, highlight: null, mode: 'closed' });
+      update({ item: null, highlight: null, mode: 'closed', last: null });
       return reply({ ok: true });
     };
 

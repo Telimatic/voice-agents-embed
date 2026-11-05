@@ -70,7 +70,14 @@ export function PhotoFallback({ participant, agentIdentity, onClose }: PhotoFall
       <p>Screen sharing isn&apos;t available in this browser. You can send a photo instead.</p>
       <label className="mt-2 block">
         <span className="sr-only">Choose a photo to send</span>
-        <input type="file" accept="image/*" disabled={sending} onChange={(e) => void onChange(e)} />
+        {/* Focus moves here on open so keyboard and screen-reader users land in the panel. */}
+        <input
+          type="file"
+          accept="image/*"
+          autoFocus
+          disabled={sending}
+          onChange={(e) => void onChange(e)}
+        />
       </label>
       <button type="button" onClick={onClose} className="mt-2 underline">
         Close

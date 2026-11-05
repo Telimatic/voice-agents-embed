@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useRoomContext } from '@livekit/components-react';
+import { activeElementOf } from '@/components/embed-popup/consent-overlay';
 import { Button } from '@/components/ui/button';
 import { type PanelHighlight, useDisplayPanel } from '@/hooks/use-display-panel';
 import type { DisplayPushPayload } from '@/lib/screenshare-protocol';
@@ -44,7 +45,6 @@ function Body({
   const url = item.url ?? '';
   switch (item.kind) {
     case 'url':
-    case 'pdf':
       return (
         <>
           {!isSameOrigin(url) && (
@@ -52,11 +52,19 @@ function Body({
               src={url}
               title={item.title}
               sandbox={PANEL_IFRAME_SANDBOX}
+              referrerPolicy="no-referrer"
               className="bg-bg1 min-h-0 w-full flex-1 rounded-lg border-0"
             />
           )}
           <NewTabLink url={url} />
         </>
+      );
+    // Chromium's PDF viewer does not run inside a sandboxed iframe, so a PDF opens in a tab.
+    case 'pdf':
+      return (
+        <div className="bg-bg2 border-separator1 flex flex-col items-start gap-3 rounded-2xl border p-4">
+          <NewTabLink url={url} />
+        </div>
       );
     case 'image': {
       const r = highlight?.region;
@@ -64,7 +72,12 @@ function Body({
         <div className="min-h-0 w-full flex-1 overflow-auto">
           <div className="relative inline-block max-w-full">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={url} alt={item.title} className="block max-w-full rounded-lg" />
+            <img
+              src={url}
+              alt={item.title || 'Shared image'}
+              referrerPolicy="no-referrer"
+              className="block max-w-full rounded-lg"
+            />
             {r && (
               <div
                 data-testid="display-region-highlight"
@@ -124,53 +137,68 @@ export function ContentPanel({ className }: { className?: string }) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const openId = item && mode === 'open' ? item.id : null;
   useEffect(() => {
-    if (openId) headingRef.current?.focus();
+    // Never pull the caller out of a field they are typing in; the live region announces it.
+    const active = activeElementOf(headingRef.current);
+    if (openId && !active?.matches('input, textarea, [contenteditable]')) {
+      headingRef.current?.focus();
+    }
   }, [openId]);
+  const announcement = (
+    <p aria-live="polite" className="sr-only">
+      {openId ? `Shared: ${item?.title || 'content'}` : ''}
+    </p>
+  );
 
   if (item && mode === 'open') {
     return (
-      <section
-        role="dialog"
-        aria-label={item.title || 'Shared content'}
-        data-testid="display-panel"
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') close();
-        }}
-        className={cn(
-          'bg-background border-separator1 dark:border-separator2 absolute inset-x-2 bottom-16 z-20 flex max-h-[70%] flex-col gap-2 rounded-2xl border p-3 drop-shadow-lg',
-          className
-        )}
-      >
-        <header className="flex items-center gap-2">
-          <h2
-            ref={headingRef}
-            tabIndex={-1}
-            className="text-fg1 min-w-0 flex-1 truncate text-sm font-semibold outline-none"
-          >
-            {item.title}
-          </h2>
-          <Button type="button" size="sm" variant="ghost" onClick={minimize}>
-            Minimize
-          </Button>
-          <Button type="button" size="sm" variant="ghost" onClick={close}>
-            Close
-          </Button>
-        </header>
-        <Body item={item} highlight={highlight} onPay={paymentOpened} />
-      </section>
+      <>
+        {announcement}
+        <section
+          role="dialog"
+          aria-label={item.title || 'Shared content'}
+          data-testid="display-panel"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') close();
+          }}
+          className={cn(
+            'bg-background border-separator1 dark:border-separator2 absolute inset-x-2 bottom-16 z-20 flex max-h-[70%] flex-col gap-2 rounded-2xl border p-3 drop-shadow-lg',
+            className
+          )}
+        >
+          <header className="flex items-center gap-2">
+            <h2
+              ref={headingRef}
+              tabIndex={-1}
+              className="text-fg1 min-w-0 flex-1 truncate text-sm font-semibold outline-none"
+            >
+              {item.title}
+            </h2>
+            <Button type="button" size="sm" variant="ghost" onClick={minimize}>
+              Minimize
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={close}>
+              Close
+            </Button>
+          </header>
+          <Body item={item} highlight={highlight} onPay={paymentOpened} />
+        </section>
+      </>
     );
   }
 
-  if (!(item ?? last)) return null;
+  if (!(item ?? last)) return announcement;
   return (
-    <div
-      role="region"
-      aria-label="Shared content"
-      className={cn('absolute bottom-16 left-2 z-20', className)}
-    >
-      <Button type="button" size="sm" variant="secondary" onClick={reopen}>
-        Reopen last
-      </Button>
-    </div>
+    <>
+      {announcement}
+      <div
+        role="region"
+        aria-label="Shared content"
+        className={cn('absolute bottom-16 left-2 z-20', className)}
+      >
+        <Button type="button" size="sm" variant="secondary" onClick={reopen}>
+          Reopen last
+        </Button>
+      </div>
+    </>
   );
 }

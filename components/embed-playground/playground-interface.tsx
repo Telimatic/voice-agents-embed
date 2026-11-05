@@ -283,10 +283,11 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
           <ViewerConsentOverlay
             key={viewerConsentRequest.expiresAt}
             name={viewerConsentRequest.name}
+            role={viewerConsentRequest.role}
             timeoutSeconds={viewerConsentRequest.timeoutSeconds}
             expiresAt={viewerConsentRequest.expiresAt}
-            onAllow={allowViewer}
-            onDeny={denyViewer}
+            onAllow={() => allowViewer(viewerConsentRequest.identity)}
+            onDeny={() => denyViewer(viewerConsentRequest.identity)}
           />
         </div>
       )}

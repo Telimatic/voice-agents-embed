@@ -2,8 +2,13 @@
 
 import * as React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { keepFocusInside, secondsRemaining } from '@/components/embed-popup/consent-overlay';
+import {
+  activeElementOf,
+  keepFocusInside,
+  secondsRemaining,
+} from '@/components/embed-popup/consent-overlay';
 import { Button } from '@/components/ui/button';
+import type { ViewerRole } from '@/lib/screenshare-protocol';
 
 /**
  * TLZ-561 (D6, D12). Asks the caller whether one named team member may see the screen
@@ -12,8 +17,9 @@ import { Button } from '@/components/ui/button';
  */
 
 export interface ViewerConsentOverlayProps {
-  /** The team member's display name; empty falls back to "a team member". */
+  /** The team member's display name; empty falls back to "a team member" / "an observer". */
   name: string;
+  role: ViewerRole;
   timeoutSeconds: number;
   expiresAt: number;
   onAllow: () => void;
@@ -22,12 +28,16 @@ export interface ViewerConsentOverlayProps {
 
 export function ViewerConsentOverlay({
   name,
+  role,
   timeoutSeconds,
   expiresAt,
   onAllow,
   onDeny,
 }: ViewerConsentOverlayProps) {
-  const who = name.trim() ? `${name.trim()} (team member)` : 'a team member';
+  const label = role === 'observer' ? 'observer' : 'team member';
+  const who = name.trim()
+    ? `${name.trim()} (${label})`
+    : `${role === 'observer' ? 'an' : 'a'} ${label}`;
   const panelRef = useRef<HTMLDivElement>(null);
   const [remaining, setRemaining] = useState(() => secondsRemaining(expiresAt));
 
@@ -40,7 +50,7 @@ export function ViewerConsentOverlay({
   // Focus moves into the prompt so it can be answered, and dismissed, from the keyboard,
   // and goes back where it was when the prompt closes.
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
+    const previous = activeElementOf(panelRef.current) as HTMLElement | null;
     panelRef.current?.focus();
     return () => previous?.focus?.();
   }, []);
@@ -96,5 +106,3 @@ export function ViewerConsentOverlay({
     </div>
   );
 }
-
-export default ViewerConsentOverlay;

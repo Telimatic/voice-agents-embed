@@ -52,10 +52,21 @@ describe('useStaffParticipants', () => {
     expect(result.current.reps).toEqual([]);
   });
 
+  it('ignores a role whose identity lacks the matching prefix (C2)', () => {
+    const fake = createFakeRoom();
+    const { result } = renderHook(() => useStaffParticipants(), { wrapper: wrap(fake) });
+    act(() => {
+      fake.addParticipant(staffParticipant('rep', 'Mallory', 'embed_user_1'));
+      fake.addParticipant(staffParticipant('observer', 'Oscar', 'rep-2'));
+    });
+    expect(result.current.reps).toEqual([]);
+    expect(result.current.observers).toEqual([]);
+  });
+
   it('picks up a role attribute that arrives after the join', () => {
     const fake = createFakeRoom();
     const { result } = renderHook(() => useStaffParticipants(), { wrapper: wrap(fake) });
-    const p = fakeHuman('late');
+    const p = fakeHuman('rep-late');
     act(() => fake.addParticipant(p));
     expect(result.current.reps).toEqual([]);
     act(() => fake.setParticipantAttributes(p, staffParticipant('rep', 'Lee').attributes));
@@ -66,8 +77,13 @@ describe('useStaffParticipants', () => {
 describe('ParticipantStrip', () => {
   it('shows a joined rep and an observer count, and clears on leave', () => {
     const fake = createFakeRoom();
-    const { queryByTestId, getByTestId } = render(<ParticipantStrip />, { wrapper: wrap(fake) });
+    const { queryByTestId, getByTestId, container } = render(<ParticipantStrip />, {
+      wrapper: wrap(fake),
+    });
     expect(queryByTestId('participant-strip')).toBeNull();
+    // The live region is in the page, empty, before anyone joins, so the join is announced.
+    const region = container.querySelector('[aria-live="polite"]');
+    expect(region?.textContent).toBe('');
     const rep = staffParticipant('rep', 'Dana');
     const obs = staffParticipant('observer', 'Sam');
     act(() => {
@@ -75,6 +91,7 @@ describe('ParticipantStrip', () => {
       fake.addParticipant(obs);
     });
     const strip = getByTestId('participant-strip');
+    expect(strip).toBe(region);
     expect(strip.getAttribute('aria-live')).toBe('polite');
     expect(strip.textContent).toContain('Dana · Team member joined');
     expect(strip.textContent).toContain('1 observer');

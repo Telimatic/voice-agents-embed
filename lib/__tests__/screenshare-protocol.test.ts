@@ -4,6 +4,7 @@ import fixture from '../../fixtures/screenshare-protocol.fixture.json';
 import {
   ATTR_ALLOWED_SURFACES,
   ATTR_CAPABLE,
+  ATTR_DISPLAY_CAPABLE,
   ATTR_DISPLAY_NAME,
   ATTR_ENABLED,
   ATTR_ROLE,
@@ -62,6 +63,7 @@ describe('screenshare protocol constants match the shared fixture', () => {
   it('participant attribute key constants match the fixture', () => {
     expect(ATTR_CAPABLE).toBe(fixture.attributes.capable);
     expect(ATTR_ENABLED).toBe(fixture.attributes.enabled);
+    expect(ATTR_DISPLAY_CAPABLE).toBe(fixture.attributes.displayCapable);
   });
 
   it('the attribute values are the stringified booleans the widget publishes', () => {

@@ -24,11 +24,13 @@ function stubFetch() {
   return fetchMock;
 }
 
-async function capableSent(fetchMock: ReturnType<typeof stubFetch>) {
+async function bodySent(fetchMock: ReturnType<typeof stubFetch>) {
   await waitFor(() => expect(fetchMock).toHaveBeenCalled());
   const init = fetchMock.mock.calls[0][1] as { body: string };
-  return JSON.parse(init.body).capable;
+  return JSON.parse(init.body);
 }
+const capableSent = async (fetchMock: ReturnType<typeof stubFetch>) =>
+  (await bodySent(fetchMock)).capable;
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -47,5 +49,19 @@ describe('useConnectionDetails capable flag (TLZ-561)', () => {
     const fetchMock = stubFetch();
     renderHook(() => useConnectionDetails(APP_CONFIG, { screenshareUi: false }));
     expect(await capableSent(fetchMock)).toBe(false);
+  });
+
+  it('reports the display panel on a browser that cannot capture (popup)', async () => {
+    stubNavigator({ capable: false });
+    const fetchMock = stubFetch();
+    renderHook(() => useConnectionDetails(APP_CONFIG));
+    expect(await bodySent(fetchMock)).toMatchObject({ capable: false, displayCapable: true });
+  });
+
+  it('never reports the display panel from a surface without it (inline bar)', async () => {
+    stubNavigator({ capable: true });
+    const fetchMock = stubFetch();
+    renderHook(() => useConnectionDetails(APP_CONFIG, { screenshareUi: false }));
+    expect((await bodySent(fetchMock)).displayCapable).toBe(false);
   });
 });

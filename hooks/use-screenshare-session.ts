@@ -115,8 +115,8 @@ export interface ScreenshareSession {
   consentRequest: ConsentRequest | null;
   /** A team member the agent asks the caller to let see the screen (D6/D12), or null. */
   viewerConsentRequest: ViewerConsentPrompt | null;
-  allowViewer: () => void;
-  denyViewer: () => void;
+  allowViewer: (identity: string) => void;
+  denyViewer: (identity: string) => void;
   acceptConsent: () => Promise<void>;
   declineConsent: () => void;
   startShare: () => Promise<RequestConsentResponse>;
@@ -209,6 +209,10 @@ export function useScreenshareSession(
 ): ScreenshareSession {
   const room = useRoomContext();
   // Evaluated once per session: the browser cannot grow the ability mid-call.
+  // shortcut: ignores the playground's framedCaptureGranted, which the token route does use
+  // (use-connection-details.ts); harmless while the playground has no photo fallback, since
+  // canShare also needs the permission the worker grants only to a capable token. Thread it
+  // through if the playground ever shows shareUnsupported.
   const capable = useMemo(() => canCaptureDisplay(), []);
   const { agentReady, agentIdentity, allowedSurfaces } = useScreenshareAgent();
   // Whether THIS participant may publish a screen right now. The token never grants it;
@@ -853,7 +857,9 @@ export function useScreenshareSession(
     // record at all.
     canShare: enabled && capable && agentReady,
     // The agent may use screen sharing but this browser cannot: the widget offers a photo.
-    shareUnsupported: enabled && !capable,
+    // The worker never widens the publish permission for a browser that cannot capture, so
+    // the agent's attribute (agentReady) is the signal here, not `enabled`.
+    shareUnsupported: !capable && agentReady,
     agentIdentity,
     consentRequest,
     viewerConsentRequest,
