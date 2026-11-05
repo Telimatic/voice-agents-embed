@@ -177,7 +177,7 @@ export default function PlaygroundAgentClient({
       <RoomAudioRenderer />
       <StartAudio label="Start Audio" />
       <div className={cn('h-full w-full', className)}>
-        <PlaygroundInterface agentName={agentName} />
+        <PlaygroundInterface agentName={agentName} framedCaptureGranted={framedCaptureGranted} />
       </div>
     </RoomContext.Provider>
   );

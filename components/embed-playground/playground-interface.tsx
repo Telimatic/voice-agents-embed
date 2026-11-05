@@ -19,6 +19,7 @@ import {
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
 import { ContentPanel } from '@/components/embed-popup/content-panel';
 import { ParticipantStrip } from '@/components/embed-popup/participant-strip';
+import { PhotoFallback } from '@/components/embed-popup/photo-fallback';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
 import { ViewerConsentOverlay } from '@/components/embed-popup/viewer-consent-overlay';
 import {
@@ -32,7 +33,14 @@ import { MicSelector } from './mic-selector';
 import { MicToggle } from './mic-toggle';
 import { StatusBadge } from './status-badge';
 
-export function PlaygroundInterface({ agentName }: { agentName?: string }) {
+export function PlaygroundInterface({
+  agentName,
+  framedCaptureGranted,
+}: {
+  agentName?: string;
+  /** The iframe's display-capture grant, as passed to the token route (agent-client). */
+  framedCaptureGranted?: boolean;
+}) {
   const { state } = useVoiceAssistant();
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -58,8 +66,12 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
   const [sharePending, setSharePending] = useState(false);
   const notifyStopped = useScreenshareStopNotifier();
   const notifyCallerConsent = useScreenshareCallerConsentNotifier();
+  // TLZ-561 (A4): a caller who cannot share their screen (phones) may send a photo instead.
+  const [photoOpen, setPhotoOpen] = useState(false);
   const {
     canShare,
+    shareUnsupported,
+    agentIdentity,
     consentRequest,
     acceptConsent,
     declineConsent,
@@ -68,7 +80,11 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
     viewerConsentRequest,
     allowViewer,
     denyViewer,
-  } = useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
+  } = useScreenshareSession({
+    onStopped: notifyStopped,
+    onCallerConsent: notifyCallerConsent,
+    framedCaptureGranted,
+  });
 
   /** The one Stop path the page owns, shared by the banner and the share button. */
   const handleStopShare = useCallback(async () => {
@@ -232,6 +248,15 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
               )}
             </button>
           )}
+          {shareUnsupported && (
+            <button
+              type="button"
+              onClick={() => setPhotoOpen(true)}
+              className="bg-bg2 text-fg1 border-separator1 hover:bg-bg3 hover:border-separator2 flex h-9 items-center rounded-full border px-3 text-xs font-semibold transition-all duration-200"
+            >
+              Send a photo
+            </button>
+          )}
           <StatusBadge state={state} />
           <DisconnectButton>
             <div className="bg-destructive hover:bg-destructive-hover text-destructive-foreground border-destructive flex h-9 cursor-pointer items-center gap-1.5 rounded-full border px-4 py-2 text-xs font-semibold transition-all">
@@ -255,6 +280,15 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
       )}
 
       <ParticipantStrip className={isScreenShareEnabled ? 'top-[4.5rem]' : 'top-2'} />
+
+      {/* Photo fallback (TLZ-561, A4), as in the popup: only where screen sharing is unavailable. */}
+      {photoOpen && shareUnsupported && (
+        <PhotoFallback
+          participant={localParticipant}
+          agentIdentity={agentIdentity}
+          onClose={() => setPhotoOpen(false)}
+        />
+      )}
       <ContentPanel />
 
       {/* The iframe theme sets --background to transparent so the page blends into the
