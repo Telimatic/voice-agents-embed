@@ -41,6 +41,8 @@ export default function useConnectionDetails(
       process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ??
       '/api/connection-details';
     const url = new URL(endpoint, window.location.origin);
+    // TLZ-742: read now, not at mount — the partner page may have refreshed it.
+    const sessionToken = appConfig.getSessionToken?.() || undefined;
 
     let data: ConnectionDetails;
     try {
@@ -63,6 +65,7 @@ export default function useConnectionDetails(
                 agents: [{ agent_name: appConfig.agentName }],
               }
             : undefined,
+          ...(sessionToken ? { sessionToken } : {}),
         }),
       });
       data = await res.json();
@@ -70,12 +73,21 @@ export default function useConnectionDetails(
       console.error('Error fetching connection details:', error);
       throw new Error('Error fetching connection details!');
     }
+    // A refused request (e.g. an expired TLZ-742 session token) carries no token: fail here
+    // with the reason instead of handing the room a broken token.
+    if (!data || typeof data.participantToken !== 'string') {
+      const refusal = data as unknown as { error?: string; reason?: string } | null;
+      const reason = [refusal?.error, refusal?.reason].filter(Boolean).join(': ');
+      console.error('Connection details refused:', reason || data);
+      throw new Error(`Connection refused${reason ? ` (${reason})` : ''}`);
+    }
 
     setConnectionDetails(data);
     return data;
   }, [
     appConfig.agentId,
     appConfig.agentName,
+    appConfig.getSessionToken,
     appConfig.sandboxId,
     appConfig.connectionDetailsEndpoint,
     screenshareUi,

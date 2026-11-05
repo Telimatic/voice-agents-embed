@@ -202,3 +202,161 @@ describe('client IP attribute (TLZ-706) — minted from Cloudflare, never from X
     expect(decodeAttributes(participantToken)['telzino.client_ip']).toBe('203.0.113.45');
   });
 });
+
+describe('web call session token (TLZ-742) — session id into room metadata, server-side only', () => {
+  const SECRET = 'route-test-session-secret';
+  const ORIGIN = 'https://portal.example.com';
+  const SESSION = '11111111-1111-1111-1111-111111111111';
+  const AGENT = '22222222-2222-2222-2222-222222222222';
+
+  async function sessionToken(
+    over: Record<string, unknown> = {},
+    secret = SECRET
+  ): Promise<string> {
+    const { createHmac } = await import('crypto');
+    const payload = {
+      typ: 'web_call_session',
+      sid: SESSION,
+      agent: AGENT,
+      origin: ORIGIN,
+      exp: Math.floor(Date.now() / 1000) + 300,
+      ...over,
+    };
+    const b64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    return `${b64}.${createHmac('sha256', secret).update(b64).digest('base64url')}`;
+  }
+
+  function roomConfigOf(
+    token: string
+  ): { metadata?: string; agents?: { agentName?: string }[] } | undefined {
+    return (
+      decodeJwt(token) as { roomConfig?: { metadata?: string; agents?: { agentName?: string }[] } }
+    ).roomConfig;
+  }
+
+  beforeEach(() => {
+    process.env.WEB_CALL_SESSION_TOKEN_SECRET = SECRET;
+  });
+  afterEach(() => {
+    delete process.env.WEB_CALL_SESSION_TOKEN_SECRET;
+  });
+
+  it("writes the session id into the room metadata and uses the token's agent for the room", async () => {
+    const res = await POST(
+      postRequest({ sessionToken: await sessionToken(), capable: true }, { origin: ORIGIN })
+    );
+    assertResponse(res);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.roomName).toMatch(new RegExp(`^agent-${AGENT}-\\d+$`));
+    const config = roomConfigOf(data.participantToken);
+    expect(JSON.parse(config?.metadata ?? '{}')).toEqual({ telzino_web_call_session: SESSION });
+    // No explicit dispatch: unnamed workers still get the job through LiveKit's default dispatch.
+    expect(config?.agents ?? []).toEqual([]);
+    const grant = decodeGrant(data.participantToken);
+    expect(grant.room).toBe(data.roomName);
+    expect(grant.canUpdateOwnMetadata).toBeFalsy();
+    expect((grant as Record<string, unknown>).roomAdmin).toBeFalsy();
+    // Exactly the usual attributes: the session id never goes into participant attributes.
+    expect(decodeAttributes(data.participantToken)).toEqual({
+      'telzino.screenshare.capable': 'true',
+      'telzino.display.capable': 'false',
+    });
+  });
+
+  it('keeps the named-worker passthrough alongside the metadata', async () => {
+    const res = await POST(
+      postRequest(
+        { sessionToken: await sessionToken(), room_config: { agents: [{ agent_name: 'dev-x' }] } },
+        { origin: ORIGIN }
+      )
+    );
+    assertResponse(res);
+    const config = roomConfigOf((await res.json()).participantToken);
+    expect(config?.agents?.[0]?.agentName).toBe('dev-x');
+    expect(JSON.parse(config?.metadata ?? '{}')).toEqual({ telzino_web_call_session: SESSION });
+  });
+
+  it.each([
+    ['another website', async () => sessionToken(), 'https://evil.example.com', 'origin_mismatch'],
+    ['no Origin header', async () => sessionToken(), undefined, 'origin_mismatch'],
+    [
+      'an expired token',
+      async () => sessionToken({ exp: Math.floor(Date.now() / 1000) - 1 }),
+      ORIGIN,
+      'expired',
+    ],
+    ['another secret', async () => sessionToken({}, 'other-secret'), ORIGIN, 'bad_signature'],
+    ['a non-string token', async () => 42 as unknown as string, ORIGIN, 'malformed'],
+  ])('401s on %s and mints nothing', async (_label, makeToken, origin, reason) => {
+    const res = await POST(
+      postRequest({ sessionToken: await makeToken() }, origin ? { origin } : {})
+    );
+    assertResponse(res);
+    expect(res.status).toBe(401);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    const body = await res.json();
+    expect(body).toEqual({ error: 'invalid_session_token', reason });
+    expect(body).not.toHaveProperty('participantToken');
+  });
+
+  it('400s when the body names a different agent than the token', async () => {
+    const res = await POST(
+      postRequest(
+        { sessionToken: await sessionToken(), agentId: 'other-agent' },
+        { origin: ORIGIN }
+      )
+    );
+    assertResponse(res);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('agent_mismatch');
+  });
+
+  it('treats the agent id in the body case-insensitively', async () => {
+    const lettered = 'abcdef12-3456-4789-8abc-def123456789';
+    const res = await POST(
+      postRequest(
+        { sessionToken: await sessionToken({ agent: lettered }), agentId: lettered.toUpperCase() },
+        { origin: ORIGIN }
+      )
+    );
+    assertResponse(res);
+    expect(res.status).toBe(200);
+  });
+
+  it.each([123, { id: AGENT }, [AGENT]])(
+    'refuses a non-text agent id in the body as agent_mismatch (%j)',
+    async (agentId) => {
+      const res = await POST(
+        postRequest({ sessionToken: await sessionToken(), agentId }, { origin: ORIGIN })
+      );
+      assertResponse(res);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('agent_mismatch');
+    }
+  );
+
+  it('accepts the same agent id in the body (popup sends data-agent-id too)', async () => {
+    const res = await POST(
+      postRequest({ sessionToken: await sessionToken(), agentId: AGENT }, { origin: ORIGIN })
+    );
+    assertResponse(res);
+    expect(res.status).toBe(200);
+  });
+
+  it('500s when the session secret is not configured', async () => {
+    delete process.env.WEB_CALL_SESSION_TOKEN_SECRET;
+    const res = await POST(postRequest({ sessionToken: await sessionToken() }, { origin: ORIGIN }));
+    assertResponse(res);
+    expect(res.status).toBe(500);
+    expect(await res.json()).not.toHaveProperty('participantToken');
+  });
+
+  it('writes no room metadata without a session token', async () => {
+    const res = await POST(postRequest({ agentId: 'agent-1' }, { origin: ORIGIN }));
+    assertResponse(res);
+    const data = await res.json();
+    expect(data.roomName).toMatch(/^agent-agent-1-\d+$/);
+    expect(roomConfigOf(data.participantToken)?.metadata ?? '').toBe('');
+  });
+});

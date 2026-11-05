@@ -42,6 +42,9 @@ if (agentIdAttribute) {
     .then((appConfig) => {
       // Pass the agentId to appConfig for use in connection details
       appConfig.agentId = agentIdAttribute;
+      // TLZ-742: a web call session token, read live from the script tag on every fetch so
+      // the page can replace data-session-token with a fresh one before the visitor calls.
+      appConfig.getSessionToken = () => scriptTag?.dataset.sessionToken || undefined;
       // Set the connection details endpoint based on script origin
       appConfig.connectionDetailsEndpoint = `${scriptOrigin}/api/connection-details`;
       const root = ReactDOM.createRoot(reactRoot);
