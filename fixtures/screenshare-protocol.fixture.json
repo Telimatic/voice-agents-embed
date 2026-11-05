@@ -3,12 +3,20 @@
   "rpcMethods": {
     "requestConsent": "screenshare.requestConsent",
     "stop": "screenshare.stop",
-    "notify": "screenshare.notify"
+    "notify": "screenshare.notify",
+    "takeoverRequestViewerConsent": "takeover.requestViewerConsent",
+    "displayPush": "display.push",
+    "displayHighlight": "display.highlight",
+    "displayClear": "display.clear",
+    "displayNotify": "display.notify"
   },
   "attributes": {
     "capable": "telzino.screenshare.capable",
     "enabled": "telzino.screenshare.enabled",
-    "allowedSurfaces": "telzino.screenshare.allowed_surfaces"
+    "allowedSurfaces": "telzino.screenshare.allowed_surfaces",
+    "displayCapable": "telzino.display.capable",
+    "role": "telzino.role",
+    "displayName": "telzino.display_name"
   },
   "attributeValues": ["true", "false"],
   "enums": {
@@ -16,14 +24,23 @@
     "consentResult": ["granted", "declined", "timeout", "cancelled", "failed", "unsupported"],
     "stopReason": ["caller_stop", "browser_stop", "agent_end", "agent_left"],
     "notifyEvent": ["consent", "started", "stopped", "failed"],
-    "initiatedBy": ["agent", "caller"]
+    "initiatedBy": ["agent", "caller"],
+    "viewerRole": ["rep", "observer"],
+    "viewerConsentOutcome": ["granted", "declined", "timeout", "no_share"],
+    "displayKind": ["url", "image", "pdf", "payment", "steps"],
+    "displayPushError": ["not_allowlisted", "bad_payload"],
+    "displayNotifyEvent": ["dismissed", "minimized", "reopened", "payment_opened"]
   },
   "examples": {
     "allowedSurfacesAttributeValue": "browser,window",
     "requestConsentPayload": {
       "v": 1,
       "scope": ["browser", "window", "monitor"],
-      "viewers": [{ "role": "agent" }],
+      "viewers": [
+        {
+          "role": "agent"
+        }
+      ],
       "timeout_seconds": 30
     },
     "requestConsentResponse": {
@@ -50,6 +67,259 @@
     "notifyResponse": {
       "v": 1,
       "ok": true
+    },
+    "viewerConsentRequest": {
+      "v": 1,
+      "viewer": {
+        "identity": "rep-1",
+        "name": "Sam",
+        "role": "rep"
+      }
+    },
+    "viewerConsentResponse": {
+      "v": 1,
+      "outcome": "granted"
+    },
+    "displayPushPayload": {
+      "v": 1,
+      "id": "d1",
+      "kind": "payment",
+      "title": "Pay invoice",
+      "url": "https://pay.example.com/i/1",
+      "amount_label": "$25.00"
+    },
+    "displayPushStepsPayload": {
+      "v": 1,
+      "id": "d2",
+      "kind": "steps",
+      "title": "Reset router",
+      "steps": ["Unplug it", "Wait ten seconds", "Plug it back in"]
+    },
+    "displayPushResponse": {
+      "v": 1,
+      "ok": false,
+      "error": "not_allowlisted"
+    },
+    "displayHighlightPayload": {
+      "v": 1,
+      "id": "d1",
+      "step": 2
+    },
+    "displayHighlightResponse": {
+      "v": 1,
+      "ok": true
+    },
+    "displayClearPayload": {
+      "v": 1
+    },
+    "displayNotifyPayload": {
+      "v": 1,
+      "event": "dismissed",
+      "id": "d1"
+    },
+    "displayHighlightRegionPayload": {
+      "v": 1,
+      "id": "d1",
+      "region": {
+        "x": 0.1,
+        "y": 0.2,
+        "w": 0.5,
+        "h": 0.25
+      }
+    },
+    "displayPushResponseNullError": {
+      "v": 1,
+      "ok": true,
+      "error": null
     }
+  },
+  "constants": {
+    "photoTopic": "telzino.photo",
+    "photoMaxBytes": 8388608,
+    "viewerConsentTimeoutS": 30
+  },
+  "invalid": {
+    "viewerConsentRequest": [
+      {
+        "v": 2,
+        "viewer": {
+          "identity": "rep-1",
+          "name": "Sam",
+          "role": "rep"
+        }
+      },
+      {
+        "v": 1,
+        "viewer": {
+          "identity": "rep-1",
+          "name": "Sam",
+          "role": "admin"
+        }
+      },
+      {
+        "v": 1
+      }
+    ],
+    "viewerConsentResponse": [
+      {
+        "v": 2,
+        "outcome": "granted"
+      },
+      {
+        "v": 1,
+        "outcome": "maybe"
+      },
+      {
+        "v": 1
+      }
+    ],
+    "displayPushPayload": [
+      {
+        "v": 2,
+        "id": "d1",
+        "kind": "payment",
+        "title": "Pay invoice",
+        "url": "https://pay.example.com/i/1",
+        "amount_label": "$25.00"
+      },
+      {
+        "v": 1,
+        "id": "d1",
+        "kind": "video",
+        "title": "Pay invoice",
+        "url": "https://pay.example.com/i/1",
+        "amount_label": "$25.00"
+      },
+      {
+        "v": 1,
+        "id": "d1",
+        "kind": "payment",
+        "title": "Pay invoice",
+        "amount_label": "$25.00"
+      },
+      {
+        "v": 1,
+        "id": "d1",
+        "kind": "payment",
+        "title": "Pay invoice",
+        "url": "http://pay.example.com/i/1",
+        "amount_label": "$25.00"
+      },
+      {
+        "v": 1,
+        "id": "d2",
+        "kind": "steps",
+        "title": "Reset router"
+      },
+      {
+        "v": 1,
+        "id": "d2",
+        "kind": "steps",
+        "title": "Reset router",
+        "steps": []
+      },
+      {
+        "v": 1,
+        "id": "d2",
+        "kind": "steps",
+        "title": "Reset router",
+        "steps": ["x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"]
+      },
+      {
+        "v": 1,
+        "id": "d2",
+        "kind": "steps",
+        "title": "Reset router",
+        "steps": ["ok", ""]
+      },
+      {
+        "v": 1,
+        "id": "d2",
+        "kind": "steps",
+        "title": "Reset router",
+        "steps": ["ok", "   "]
+      }
+    ],
+    "displayPushResponse": [
+      {
+        "v": 2,
+        "ok": true
+      },
+      {
+        "v": 1
+      },
+      {
+        "v": 1,
+        "ok": false,
+        "error": "boom"
+      }
+    ],
+    "displayHighlightPayload": [
+      {
+        "v": 2,
+        "id": "d1",
+        "step": 1
+      },
+      {
+        "v": 1,
+        "step": 1
+      },
+      {
+        "v": 1,
+        "id": "d1",
+        "region": {
+          "x": 1.5,
+          "y": 0,
+          "w": 0.1,
+          "h": 0.1
+        }
+      },
+      {
+        "v": 1,
+        "id": "d1"
+      },
+      {
+        "v": 1,
+        "id": "d1",
+        "step": 1,
+        "region": {
+          "x": 0.1,
+          "y": 0.2,
+          "w": 0.5,
+          "h": 0.25
+        }
+      }
+    ],
+    "displayHighlightResponse": [
+      {
+        "v": 2,
+        "ok": true
+      },
+      {
+        "v": 1
+      }
+    ],
+    "displayClearPayload": [
+      {
+        "v": 2
+      },
+      {}
+    ],
+    "displayNotifyPayload": [
+      {
+        "v": 2,
+        "event": "dismissed",
+        "id": "d1"
+      },
+      {
+        "v": 1,
+        "event": "exploded",
+        "id": "d1"
+      },
+      {
+        "v": 1,
+        "event": "dismissed"
+      }
+    ]
   }
 }

@@ -50,6 +50,7 @@ export function Trigger({ error = null, popupOpen, onToggle }: TriggerProps) {
             bounce: 0.2,
           }}
           onClick={onToggle}
+          aria-label={popupOpen ? 'End call' : 'Start call'}
           className={cn(
             'relative m-0 block size-12 p-0.5 drop-shadow-md',
             'scale-100 transition-[scale] duration-300 hover:scale-105 focus:scale-105',

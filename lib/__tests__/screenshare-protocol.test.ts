@@ -4,15 +4,34 @@ import fixture from '../../fixtures/screenshare-protocol.fixture.json';
 import {
   ATTR_ALLOWED_SURFACES,
   ATTR_CAPABLE,
+  ATTR_DISPLAY_CAPABLE,
+  ATTR_DISPLAY_NAME,
   ATTR_ENABLED,
+  ATTR_ROLE,
   type ConsentResult,
+  PHOTO_MAX_BYTES,
+  PHOTO_TOPIC,
+  RPC_DISPLAY_CLEAR,
+  RPC_DISPLAY_HIGHLIGHT,
+  RPC_DISPLAY_NOTIFY,
+  RPC_DISPLAY_PUSH,
   RPC_NOTIFY,
   RPC_REQUEST_CONSENT,
   RPC_STOP,
+  RPC_TAKEOVER_REQUEST_VIEWER_CONSENT,
   SCREENSHARE_PROTOCOL_VERSION,
   SHARE_SURFACES,
   type StopReason,
+  VIEWER_CONSENT_TIMEOUT_S,
   isCurrentVersion,
+  isDisplayClearPayload,
+  isDisplayHighlightPayload,
+  isDisplayHighlightResponse,
+  isDisplayNotifyPayload,
+  isDisplayPushPayload,
+  isDisplayPushResponse,
+  isViewerConsentRequest,
+  isViewerConsentResponse,
   parseAllowedSurfaces,
 } from '../screenshare-protocol';
 
@@ -44,6 +63,7 @@ describe('screenshare protocol constants match the shared fixture', () => {
   it('participant attribute key constants match the fixture', () => {
     expect(ATTR_CAPABLE).toBe(fixture.attributes.capable);
     expect(ATTR_ENABLED).toBe(fixture.attributes.enabled);
+    expect(ATTR_DISPLAY_CAPABLE).toBe(fixture.attributes.displayCapable);
   });
 
   it('the attribute values are the stringified booleans the widget publishes', () => {
@@ -207,4 +227,60 @@ describe('callerConsentNotifyPayload', () => {
       })
     ).toMatchObject({ event: 'consent', result: 'failed', reason: 'NotFoundError' });
   });
+});
+
+describe('takeover + display push contract (fixture)', () => {
+  it('constants match the fixture', () => {
+    expect(RPC_TAKEOVER_REQUEST_VIEWER_CONSENT).toBe(
+      fixture.rpcMethods.takeoverRequestViewerConsent
+    );
+    expect(RPC_DISPLAY_PUSH).toBe(fixture.rpcMethods.displayPush);
+    expect(RPC_DISPLAY_HIGHLIGHT).toBe(fixture.rpcMethods.displayHighlight);
+    expect(RPC_DISPLAY_CLEAR).toBe(fixture.rpcMethods.displayClear);
+    expect(RPC_DISPLAY_NOTIFY).toBe(fixture.rpcMethods.displayNotify);
+    expect(ATTR_ROLE).toBe(fixture.attributes.role);
+    expect(ATTR_DISPLAY_NAME).toBe(fixture.attributes.displayName);
+    expect(PHOTO_TOPIC).toBe(fixture.constants.photoTopic);
+    expect(PHOTO_MAX_BYTES).toBe(fixture.constants.photoMaxBytes);
+    expect(VIEWER_CONSENT_TIMEOUT_S).toBe(fixture.constants.viewerConsentTimeoutS);
+  });
+
+  const e = fixture.examples;
+  const guards: Record<string, { guard: (p: unknown) => boolean; valid: unknown[] }> = {
+    viewerConsentRequest: { guard: isViewerConsentRequest, valid: [e.viewerConsentRequest] },
+    viewerConsentResponse: { guard: isViewerConsentResponse, valid: [e.viewerConsentResponse] },
+    displayPushPayload: {
+      guard: isDisplayPushPayload,
+      valid: [e.displayPushPayload, e.displayPushStepsPayload],
+    },
+    displayPushResponse: {
+      guard: isDisplayPushResponse,
+      valid: [e.displayPushResponse, e.displayPushResponseNullError],
+    },
+    displayHighlightPayload: {
+      guard: isDisplayHighlightPayload,
+      valid: [e.displayHighlightPayload, e.displayHighlightRegionPayload],
+    },
+    displayHighlightResponse: {
+      guard: isDisplayHighlightResponse,
+      valid: [e.displayHighlightResponse],
+    },
+    displayClearPayload: { guard: isDisplayClearPayload, valid: [e.displayClearPayload] },
+    displayNotifyPayload: { guard: isDisplayNotifyPayload, valid: [e.displayNotifyPayload] },
+  };
+
+  it('every invalid fixture group has a guard', () => {
+    expect(Object.keys(fixture.invalid).sort()).toEqual(Object.keys(guards).sort());
+  });
+
+  for (const [name, { guard, valid }] of Object.entries(guards)) {
+    it(`${name}: accepts every valid case`, () => {
+      for (const payload of valid) expect(guard(payload)).toBe(true);
+    });
+    it(`${name}: rejects every invalid case`, () => {
+      const cases = (fixture.invalid as Record<string, unknown[]>)[name];
+      expect(cases.length).toBeGreaterThan(0);
+      for (const payload of cases) expect(guard(payload)).toBe(false);
+    });
+  }
 });

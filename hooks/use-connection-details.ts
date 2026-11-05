@@ -56,6 +56,8 @@ export default function useConnectionDetails(
           // stamped into the token server-side, because the participant itself has no
           // permission to write attributes — see createParticipantToken for why.
           capable: screenshareUi && canCaptureDisplay({ framedCaptureGranted }),
+          // TLZ-561: the display panel renders wherever the screenshare UI does, capture or not.
+          displayCapable: screenshareUi,
           room_config: appConfig.agentName
             ? {
                 agents: [{ agent_name: appConfig.agentName }],

@@ -17,7 +17,10 @@ import {
   SpinnerIcon,
 } from '@phosphor-icons/react';
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
+import { ContentPanel } from '@/components/embed-popup/content-panel';
+import { ParticipantStrip } from '@/components/embed-popup/participant-strip';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
+import { ViewerConsentOverlay } from '@/components/embed-popup/viewer-consent-overlay';
 import {
   useScreenshareCallerConsentNotifier,
   useScreenshareStopNotifier,
@@ -55,8 +58,17 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
   const [sharePending, setSharePending] = useState(false);
   const notifyStopped = useScreenshareStopNotifier();
   const notifyCallerConsent = useScreenshareCallerConsentNotifier();
-  const { canShare, consentRequest, acceptConsent, declineConsent, startShare, stopShare } =
-    useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
+  const {
+    canShare,
+    consentRequest,
+    acceptConsent,
+    declineConsent,
+    startShare,
+    stopShare,
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
+  } = useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
 
   /** The one Stop path the page owns, shared by the banner and the share button. */
   const handleStopShare = useCallback(async () => {
@@ -242,6 +254,9 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
         />
       )}
 
+      <ParticipantStrip className={isScreenShareEnabled ? 'top-[4.5rem]' : 'top-2'} />
+      <ContentPanel />
+
       {/* The iframe theme sets --background to transparent so the page blends into the
           host, which leaves the overlay's own bg-background with no fill here: the
           transcript showed through it. This layer gives it the playground's solid
@@ -258,6 +273,21 @@ export function PlaygroundInterface({ agentName }: { agentName?: string }) {
               void acceptConsent();
             }}
             onDecline={declineConsent}
+          />
+        </div>
+      )}
+
+      {/* TLZ-561 (D6/D12): may this team member see the screen already being shared? */}
+      {viewerConsentRequest && (
+        <div className="bg-embed-bg absolute inset-0 z-30 rounded-2xl">
+          <ViewerConsentOverlay
+            key={viewerConsentRequest.expiresAt}
+            name={viewerConsentRequest.name}
+            role={viewerConsentRequest.role}
+            timeoutSeconds={viewerConsentRequest.timeoutSeconds}
+            expiresAt={viewerConsentRequest.expiresAt}
+            onAllow={() => allowViewer(viewerConsentRequest.identity)}
+            onDeny={() => denyViewer(viewerConsentRequest.identity)}
           />
         </div>
       )}

@@ -14,8 +14,12 @@ import {
 import { ActionBar } from '@/components/embed-popup/action-bar';
 import { AudioVisualizer } from '@/components/embed-popup/audio-visualizer';
 import { ConsentOverlay } from '@/components/embed-popup/consent-overlay';
+import { ContentPanel } from '@/components/embed-popup/content-panel';
+import { ParticipantStrip } from '@/components/embed-popup/participant-strip';
+import { PhotoFallback } from '@/components/embed-popup/photo-fallback';
 import { ShareBanner } from '@/components/embed-popup/share-banner';
 import { Transcript } from '@/components/embed-popup/transcript';
+import { ViewerConsentOverlay } from '@/components/embed-popup/viewer-consent-overlay';
 import useChatAndTranscription from '@/hooks/use-chat-and-transcription';
 import {
   useScreenshareCallerConsentNotifier,
@@ -71,7 +75,7 @@ export const PopupView = ({
     audioTrack: agentAudioTrack,
     videoTrack: agentVideoTrack,
   } = useVoiceAssistant();
-  const { isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
+  const { isCameraEnabled, isScreenShareEnabled, localParticipant } = useLocalParticipant();
   const cameraTrack: TrackReference | undefined = useLocalTrackRef(Track.Source.Camera);
   // The caller's OWN screen track. `useTracks` would also return a remote one.
   const localScreenShareTrack: TrackReference | undefined = useLocalTrackRef(
@@ -79,6 +83,7 @@ export const PopupView = ({
   );
   const [chatOpen, setChatOpen] = useState(false);
   const [sharePending, setSharePending] = useState(false);
+  const [photoOpen, setPhotoOpen] = useState(false);
   const { messages, send } = useChatAndTranscription();
   // TLZ-561. One ended share, one `screenshare.notify`: the session hook reports a stop
   // exactly once, from its single unpublish listener, and this turns that report into the
@@ -90,8 +95,19 @@ export const PopupView = ({
   // TLZ-561. Owns the consent prompt and the screen track. Whether a share may be offered
   // is derived inside the hook from the live publish permission (widened by the worker at
   // runtime) and the agent's attributes, so nothing is threaded in from the token route.
-  const { canShare, consentRequest, acceptConsent, declineConsent, startShare, stopShare } =
-    useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
+  const {
+    canShare,
+    shareUnsupported,
+    agentIdentity,
+    consentRequest,
+    acceptConsent,
+    declineConsent,
+    startShare,
+    stopShare,
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
+  } = useScreenshareSession({ onStopped: notifyStopped, onCallerConsent: notifyCallerConsent });
 
   const { supportsChatInput, supportsVideoInput } = appConfig;
   const capabilities = {
@@ -347,6 +363,7 @@ export const PopupView = ({
               pending: sharePending,
               onPressedChange: handleShareToggle,
             }}
+            onSendPhoto={shareUnsupported ? () => setPhotoOpen(true) : undefined}
             onSendMessage={onSendMessage}
             onChatOpenChange={setChatOpen}
           />
@@ -364,6 +381,19 @@ export const PopupView = ({
           />
         )}
 
+        {/* Team members in the call (TLZ-561). Below the sharing banner when both show. */}
+        <ParticipantStrip className={isScreenShareEnabled ? 'top-[4.5rem]' : 'top-2'} />
+
+        {/* Photo fallback (TLZ-561, A4): only while an agent is there to receive it. */}
+        {photoOpen && shareUnsupported && (
+          <PhotoFallback
+            participant={localParticipant}
+            agentIdentity={agentIdentity}
+            onClose={() => setPhotoOpen(false)}
+          />
+        )}
+        <ContentPanel />
+
         {/* Screenshare consent (TLZ-561). Panel-filling: agreeing to share a screen is
             not a decision to make out of the corner of an eye. */}
         {consentRequest && (
@@ -377,6 +407,19 @@ export const PopupView = ({
               void acceptConsent();
             }}
             onDecline={declineConsent}
+          />
+        )}
+
+        {/* TLZ-561 (D6/D12): may this team member see the screen already being shared? */}
+        {viewerConsentRequest && (
+          <ViewerConsentOverlay
+            key={viewerConsentRequest.expiresAt}
+            name={viewerConsentRequest.name}
+            role={viewerConsentRequest.role}
+            timeoutSeconds={viewerConsentRequest.timeoutSeconds}
+            expiresAt={viewerConsentRequest.expiresAt}
+            onAllow={() => allowViewer(viewerConsentRequest.identity)}
+            onDeny={() => denyViewer(viewerConsentRequest.identity)}
           />
         )}
       </div>

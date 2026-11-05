@@ -41,9 +41,12 @@ export type AgentParticipantLike = {
   attributes?: Record<string, string>;
 };
 
-/** The worker joins as an agent-kind participant. */
+/** TLZ-756: a video avatar provider joins agent-kind and marks itself with this attribute. */
+export const ATTR_PUBLISH_ON_BEHALF = 'lk.publish_on_behalf';
+
+/** The worker joins as an agent-kind participant; the avatar worker is not the agent. */
 export function isAgentParticipant(participant: AgentParticipantLike | undefined): boolean {
-  if (!participant) {
+  if (!participant || ATTR_PUBLISH_ON_BEHALF in (participant.attributes ?? {})) {
     return false;
   }
   return participant.isAgent === true || participant.kind === ParticipantKind.AGENT;
