@@ -95,3 +95,50 @@ describe('PlaygroundInterface screenshare (TLZ-561)', () => {
     expect(dialog.parentElement?.className).toContain('bg-embed-bg');
   });
 });
+
+describe('PlaygroundInterface photo fallback (TLZ-561, A4)', () => {
+  const photoButton = () => screen.queryByRole('button', { name: 'Send a photo' });
+
+  it('offers "Send a photo" on a phone that cannot share its screen', async () => {
+    stubNavigator({ capable: false });
+    const fake = createFakeRoom();
+    fake.addParticipant(fakeAgent());
+    renderPlayground(fake);
+    await waitFor(() => expect(photoButton()).not.toBeNull());
+    expect(shareButton()).toBeNull();
+  });
+
+  it('offers no photo where the screen can be shared', async () => {
+    stubNavigator({ capable: true });
+    const fake = createFakeRoom();
+    fake.addParticipant(fakeAgent());
+    fake.grantScreenShare();
+    renderPlayground(fake);
+    await waitFor(() => expect(shareButton()).not.toBeNull());
+    expect(photoButton()).toBeNull();
+  });
+
+  it('offers no photo for an agent that has not enabled screenshare', async () => {
+    stubNavigator({ capable: false });
+    const fake = createFakeRoom();
+    fake.addParticipant(fakeAgent('agent-1', {}));
+    renderPlayground(fake);
+    await waitFor(() => expect(fake.rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
+    expect(photoButton()).toBeNull();
+  });
+
+  it('offers the photo on a desktop when the iframe was not granted display-capture', async () => {
+    // Old embed code (microphone only): the token route told the worker "not capable", so the
+    // widget must agree and offer the photo instead of a share it can never start.
+    stubNavigator({ capable: true });
+    vi.stubGlobal('top', {});
+    const fake = createFakeRoom();
+    fake.addParticipant(fakeAgent());
+    render(
+      <RoomContext.Provider value={fake.room as unknown as Room}>
+        <PlaygroundInterface agentName="Raven" framedCaptureGranted={false} />
+      </RoomContext.Provider>
+    );
+    await waitFor(() => expect(photoButton()).not.toBeNull());
+  });
+});

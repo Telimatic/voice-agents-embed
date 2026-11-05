@@ -96,6 +96,11 @@ export interface UseScreenshareSessionOptions {
    * `no_display_capture`): nothing was asked of the caller, so no consent happened.
    */
   onCallerConsent?: (response: RequestConsentResponse) => void;
+  /**
+   * The playground's iframe display-capture grant (see CanCaptureDisplayOptions), the same
+   * value its token route uses. Undefined (the popup) keeps the original rule.
+   */
+  framedCaptureGranted?: boolean;
 }
 
 export interface ScreenshareSession {
@@ -208,12 +213,14 @@ export function useScreenshareSession(
   options: UseScreenshareSessionOptions = {}
 ): ScreenshareSession {
   const room = useRoomContext();
-  // Evaluated once per session: the browser cannot grow the ability mid-call.
-  // shortcut: ignores the playground's framedCaptureGranted, which the token route does use
-  // (use-connection-details.ts); harmless while the playground has no photo fallback, since
-  // canShare also needs the permission the worker grants only to a capable token. Thread it
-  // through if the playground ever shows shareUnsupported.
-  const capable = useMemo(() => canCaptureDisplay(), []);
+  // Evaluated once per session: the browser cannot grow the ability mid-call. Same inputs as
+  // the token route (use-connection-details.ts), so shareUnsupported matches what the worker
+  // was told: a playground framed without display-capture offers the photo, not a share.
+  const framedCaptureGranted = options.framedCaptureGranted;
+  const capable = useMemo(
+    () => canCaptureDisplay({ framedCaptureGranted }),
+    [framedCaptureGranted]
+  );
   const { agentReady, agentIdentity, allowedSurfaces } = useScreenshareAgent();
   // Whether THIS participant may publish a screen right now. The token never grants it;
   // the worker widens the permission after the resolver approves the session, and the
