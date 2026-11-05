@@ -127,7 +127,10 @@ describe('capability attribute (A4) — minted, never client-written', () => {
     assertResponse(res);
     const { participantToken } = (await res.json()) as { participantToken: string };
 
-    expect(decodeAttributes(participantToken)).toEqual({ 'telzino.screenshare.capable': 'true' });
+    expect(decodeAttributes(participantToken)).toEqual({
+      'telzino.screenshare.capable': 'true',
+      'telzino.display.capable': 'false',
+    });
     expect(decodeGrant(participantToken).canUpdateOwnMetadata).toBeFalsy();
   });
 
@@ -149,6 +152,23 @@ describe('capability attribute (A4) — minted, never client-written', () => {
       assertResponse(res);
       const { participantToken } = (await res.json()) as { participantToken: string };
       expect(decodeAttributes(participantToken)['telzino.screenshare.capable']).toBe('false');
+    }
+  });
+});
+
+describe('display capability attribute (TLZ-561) — minted, independent of capture', () => {
+  it("stamps 'true' only for a boolean true, even when the browser cannot capture", async () => {
+    const { POST } = await import('../route');
+    const cases: [Record<string, unknown>, string][] = [
+      [{ agentId: 'agent-1', capable: false, displayCapable: true }, 'true'],
+      [{ agentId: 'agent-1' }, 'false'],
+      [{ agentId: 'agent-1', displayCapable: 'yes' }, 'false'],
+    ];
+    for (const [body, expected] of cases) {
+      const res = await POST(postRequest(body));
+      assertResponse(res);
+      const { participantToken } = (await res.json()) as { participantToken: string };
+      expect(decodeAttributes(participantToken)['telzino.display.capable']).toBe(expected);
     }
   });
 });
@@ -237,8 +257,10 @@ describe('web call session token (TLZ-742) — session id into room metadata, se
     expect(grant.room).toBe(data.roomName);
     expect(grant.canUpdateOwnMetadata).toBeFalsy();
     expect((grant as Record<string, unknown>).roomAdmin).toBeFalsy();
+    // Exactly the usual attributes: the session id never goes into participant attributes.
     expect(decodeAttributes(data.participantToken)).toEqual({
       'telzino.screenshare.capable': 'true',
+      'telzino.display.capable': 'false',
     });
   });
 

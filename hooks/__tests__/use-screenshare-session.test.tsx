@@ -193,6 +193,50 @@ describe('useScreenshareSession', () => {
     expect(response.track_sid).toBe('TR_screen_9');
   });
 
+  it('publishes the screen at low priority, capped, so audio keeps the uplink', async () => {
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
+    const hook = renderSession(room);
+    await shareUntilGranted(rpcHandlers, hook);
+
+    expect((setScreenShareEnabled.mock.calls[0] as unknown[])[2]).toEqual({
+      screenShareEncoding: { maxBitrate: 1_500_000, maxFramerate: 3, priority: 'low' },
+      degradationPreference: 'balanced',
+    });
+  });
+
+  it('stops a pick outside the allowed surfaces and answers cancelled', async () => {
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
+    const onStopped = vi.fn();
+    const hook = renderSession(room, { onStopped });
+
+    // The fake picker hands back a window; only a tab was allowed.
+    const rpc = invokeConsent(
+      rpcHandlers.get(RPC_REQUEST_CONSENT)!,
+      consentPayload({ scope: ['browser'] })
+    );
+    await waitFor(() => expect(hook.result.current.consentRequest).not.toBeNull());
+    await act(async () => {
+      await hook.result.current.acceptConsent();
+    });
+
+    const response = await parse(rpc);
+    expect(response.result).toBe('cancelled');
+    expect(response.reason).toBe('surface_not_allowed');
+    expect(setScreenShareEnabled).toHaveBeenLastCalledWith(false);
+    expect(hook.result.current.isSharing).toBe(false);
+    expect(onStopped).not.toHaveBeenCalled();
+  });
+
+  it('allows a pick whose surface the browser does not report', async () => {
+    const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
+    setScreenShareEnabled.mockResolvedValueOnce(fakePublication(undefined, 'TR_screen_4'));
+    const hook = renderSession(room);
+
+    const response = await parse(shareUntilGranted(rpcHandlers, hook));
+    expect(response.result).toBe('granted');
+    expect(setScreenShareEnabled).toHaveBeenCalledTimes(1);
+  });
+
   it('answers cancelled when the caller dismisses the browser picker', async () => {
     const { room, rpcHandlers, setScreenShareEnabled } = createGrantedRoom();
     const denied = Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' });
@@ -339,6 +383,56 @@ describe('useScreenshareSession', () => {
     const refused = await parse(invokeConsent(fake.rpcHandlers.get(RPC_REQUEST_CONSENT)!));
     expect(refused).toMatchObject({ result: 'failed', reason: 'not_permitted' });
     expect(fake.setScreenShareEnabled).not.toHaveBeenCalled();
+  });
+
+  describe('R39: consent and stop are agent-only', () => {
+    const callAs = (fake: ReturnType<typeof createGrantedRoom>, method: string, who: string) =>
+      fake.rpcHandlers.get(method)!({
+        requestId: 'r',
+        callerIdentity: who,
+        payload:
+          method === RPC_STOP
+            ? JSON.stringify({ v: SCREENSHARE_PROTOCOL_VERSION })
+            : consentPayload(),
+        responseTimeout: 10_000,
+      });
+
+    it('refuses a rep, an avatar worker and an unknown caller, and touches nothing', async () => {
+      stubNavigator({ capable: true });
+      const fake = createGrantedRoom();
+      fake.addParticipant(fakeAgent());
+      fake.addParticipant(fakeHuman('rep-1'));
+      fake.addParticipant({
+        ...fakeAgent('avatar-1'),
+        attributes: { 'lk.publish_on_behalf': 'agent-1' },
+      });
+      const { result } = renderSession(fake.room);
+      await waitFor(() => expect(fake.rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
+
+      for (const who of ['rep-1', 'avatar-1', 'nobody']) {
+        const refused = JSON.parse(await callAs(fake, RPC_REQUEST_CONSENT, who));
+        expect(refused).toMatchObject({ result: 'failed', reason: 'not_permitted' });
+        await expect(callAs(fake, RPC_STOP, who)).rejects.toThrow('caller is not the agent');
+      }
+      expect(result.current.consentRequest).toBeNull();
+      expect(fake.setScreenShareEnabled).not.toHaveBeenCalled();
+    });
+
+    it('still serves the agent', async () => {
+      stubNavigator({ capable: true });
+      const fake = createGrantedRoom();
+      const agent = fakeAgent();
+      fake.addParticipant(agent);
+      const { result } = renderSession(fake.room);
+      await waitFor(() => expect(fake.rpcHandlers.has(RPC_REQUEST_CONSENT)).toBe(true));
+      const rpc = callAs(fake, RPC_REQUEST_CONSENT, agent.identity);
+      await waitFor(() => expect(result.current.consentRequest).not.toBeNull());
+      act(() => result.current.declineConsent());
+      expect(JSON.parse(await rpc).result).toBe('declined');
+      expect(JSON.parse(await callAs(fake, RPC_STOP, agent.identity))).toMatchObject({
+        stopped: true,
+      });
+    });
   });
 
   it('startShare refuses before the permission and works after', async () => {

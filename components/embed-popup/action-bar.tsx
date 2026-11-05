@@ -8,6 +8,7 @@ import { ChatTextIcon } from '@phosphor-icons/react/dist/ssr';
 import { ChatInput } from '@/components/livekit/chat/chat-input';
 import { DeviceSelect } from '@/components/livekit/device-select';
 import { TrackToggle } from '@/components/livekit/track-toggle';
+import { Button } from '@/components/ui/button';
 import { Toggle } from '@/components/ui/toggle';
 import { UseAgentControlBarProps, useAgentControlBar } from '@/hooks/use-agent-control-bar';
 import { AppConfig } from '@/lib/types';
@@ -36,6 +37,8 @@ export interface AgentControlBarProps
     supportsScreenShare: boolean;
   };
   screenShareControl?: ScreenShareControl;
+  /** TLZ-561 (A4). Present only where screen sharing is unavailable: opens the photo panel. */
+  onSendPhoto?: () => void;
   onChatOpenChange?: (open: boolean) => void;
   onSendMessage?: (message: string) => Promise<void>;
   onDeviceError?: (error: { source: Track.Source; error: Error }) => void;
@@ -49,6 +52,7 @@ export function ActionBar({
   saveUserChoices = true,
   capabilities,
   screenShareControl,
+  onSendPhoto,
   className,
   onSendMessage,
   onChatOpenChange,
@@ -215,6 +219,12 @@ export function ActionBar({
                 className="relative w-auto"
               />
             </div>
+          )}
+
+          {onSendPhoto && (
+            <Button variant="secondary" size="sm" onClick={onSendPhoto} className="h-full">
+              Send a photo
+            </Button>
           )}
 
           {visibleControls.chat && (

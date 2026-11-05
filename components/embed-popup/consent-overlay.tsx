@@ -31,8 +31,49 @@ export interface ConsentOverlayProps {
   onDecline: () => void;
 }
 
-function secondsRemaining(expiresAt: number): number {
+export function secondsRemaining(expiresAt: number): number {
   return Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+}
+
+/**
+ * aria-modal is a promise that focus stays inside; Tab is where that promise is kept or
+ * broken. Shared with the viewer-consent prompt.
+ */
+/**
+ * The focused element in `node`'s own tree. Inside the popup's shadow root,
+ * document.activeElement is only the shadow host.
+ */
+export function activeElementOf(node: Node | null): Element | null {
+  const root = node?.getRootNode() as Document | ShadowRoot | undefined;
+  return root?.activeElement ?? document.activeElement;
+}
+
+export function keepFocusInside(
+  panel: HTMLElement | null,
+  event: React.KeyboardEvent<HTMLElement>
+): void {
+  if (event.key !== 'Tab' || !panel) {
+    return;
+  }
+  const focusable = Array.from(
+    panel.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+  );
+  if (focusable.length === 0) {
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = activeElementOf(panel);
+
+  if (event.shiftKey && (active === first || active === panel)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 export function ConsentOverlay({
@@ -72,34 +113,7 @@ export function ConsentOverlay({
         return;
       }
 
-      // aria-modal is a promise that focus stays inside; Tab is where that promise is
-      // kept or broken.
-      if (event.key !== 'Tab') {
-        return;
-      }
-      const panel = panelRef.current;
-      if (!panel) {
-        return;
-      }
-      const focusable = Array.from(
-        panel.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-        )
-      );
-      if (focusable.length === 0) {
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-
-      if (event.shiftKey && (active === first || active === panel)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      keepFocusInside(panelRef.current, event);
     },
     [capturing, onDecline]
   );
@@ -114,7 +128,7 @@ export function ConsentOverlay({
       tabIndex={-1}
       onKeyDown={handleKeyDown}
       className={cn(
-        'bg-background/98 absolute inset-0 z-30 flex flex-col justify-center gap-3 rounded-[28px] p-5 outline-none'
+        'bg-embed-bg absolute inset-0 z-30 flex flex-col justify-center gap-3 rounded-[28px] p-5 outline-none'
       )}
     >
       <h2 id="screenshare-consent-title" className="text-fg1 text-base font-semibold">

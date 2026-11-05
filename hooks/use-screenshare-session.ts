@@ -11,6 +11,10 @@ import {
 import { useRoomContext } from '@livekit/components-react';
 import { usePublishPermissions } from '@/hooks/use-publish-permissions';
 import {
+  type ViewerConsentPrompt,
+  useScreenViewerPermissions,
+} from '@/hooks/use-screen-viewer-permissions';
+import {
   type AgentParticipantLike,
   agentCanReceiveShare,
   isAgentParticipant,
@@ -21,6 +25,7 @@ import {
   type ConsentResult,
   RPC_REQUEST_CONSENT,
   RPC_STOP,
+  RPC_TAKEOVER_REQUEST_VIEWER_CONSENT,
   type RequestConsentPayload,
   type RequestConsentResponse,
   SCREENSHARE_PROTOCOL_VERSION,
@@ -103,7 +108,15 @@ export interface ScreenshareSession {
    * display, and there is an agent listening for the share.
    */
   canShare: boolean;
+  /** Screen sharing is permitted but this browser cannot capture; offer a photo instead. */
+  shareUnsupported: boolean;
+  /** Identity of the AI agent in the room, or null; the photo is addressed to it alone. */
+  agentIdentity: string | null;
   consentRequest: ConsentRequest | null;
+  /** A team member the agent asks the caller to let see the screen (D6/D12), or null. */
+  viewerConsentRequest: ViewerConsentPrompt | null;
+  allowViewer: (identity: string) => void;
+  denyViewer: (identity: string) => void;
   acceptConsent: () => Promise<void>;
   declineConsent: () => void;
   startShare: () => Promise<RequestConsentResponse>;
@@ -196,12 +209,36 @@ export function useScreenshareSession(
 ): ScreenshareSession {
   const room = useRoomContext();
   // Evaluated once per session: the browser cannot grow the ability mid-call.
+  // shortcut: ignores the playground's framedCaptureGranted, which the token route does use
+  // (use-connection-details.ts); harmless while the playground has no photo fallback, since
+  // canShare also needs the permission the worker grants only to a capable token. Thread it
+  // through if the playground ever shows shareUnsupported.
   const capable = useMemo(() => canCaptureDisplay(), []);
-  const { agentReady, allowedSurfaces } = useScreenshareAgent();
+  const { agentReady, agentIdentity, allowedSurfaces } = useScreenshareAgent();
   // Whether THIS participant may publish a screen right now. The token never grants it;
   // the worker widens the permission after the resolver approves the session, and the
   // SDK reports that as ParticipantPermissionsChanged, which this hook re-renders on.
   const { screenShare: enabled } = usePublishPermissions();
+  /** stopShare is defined below; the viewer hook's refused-restriction path reaches it through this. */
+  const stopShareRef = useRef<(reason: StopReason) => Promise<boolean>>(async () => false);
+  const {
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
+    handleViewerConsent,
+    restrictBeforeShare,
+    shareStartEnded,
+  } = useScreenViewerPermissions({
+    // StopReason has no "permissions failed"; the widget is stopping on the caller's behalf.
+    onRestrictionRefused: () => {
+      void stopShareRef.current('caller_stop').then((stopped) => {
+        if (!stopped) {
+          // The same last resort acceptConsent uses: end the capture at the source.
+          room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.stop();
+        }
+      });
+    },
+  });
 
   const [isSharing, setIsSharing] = useState(false);
   const [consentRequest, setConsentRequest] = useState<ConsentRequest | null>(null);
@@ -218,6 +255,8 @@ export function useScreenshareSession(
   const stopReasonRef = useRef<StopReason | null>(null);
   /** True while a browser picker is open, so a second accept cannot open a second one. */
   const capturingRef = useRef(false);
+  /** Set while rejecting a disallowed pick, so its unpublish is not reported as a stop. */
+  const rejectingPickRef = useRef(false);
   /** How the outstanding request was answered, when something other than the caller answered it. */
   const settledResultRef = useRef<ConsentResult | null>(null);
   /** Pending "the agent has gone" check; see AGENT_LEFT_GRACE_MS. */
@@ -255,26 +294,55 @@ export function useScreenshareSession(
     async (allowedSurfaces: ShareSurface[]): Promise<RequestConsentResponse> => {
       const localParticipant = room.localParticipant;
       try {
-        const pub = await localParticipant.setScreenShareEnabled(true, {
-          // Tab audio is never captured: the caller is already on a voice call and
-          // publishing their tab's audio would echo it back into the room.
-          audio: false,
-          video: { displaySurface: preferredSurface(allowedSurfaces) },
-          contentHint: 'text',
-          selfBrowserSurface: 'exclude',
-          surfaceSwitching: 'include',
-          // Screen content is mostly static, so a low frame rate costs the agent nothing
-          // and leaves far more headroom for the audio the call actually depends on.
-          //
-          // Omitted entirely on Safari: livekit-client documents that on Safari 17,
-          // "specifying any resolution at all would lead to a low-resolution capture"
-          // (WebKit bug 263015), and its own default is already uncapped there. A
-          // low-resolution capture makes on-screen text unreadable, which is the whole
-          // point of the feature — worth more than the frame-rate hint.
-          ...(isSafari() ? {} : { resolution: { width: 1920, height: 1080, frameRate: 3 } }),
-        });
+        // Staff already in the room must not be able to subscribe to the screen while it
+        // negotiates; a synchronous refusal lands in the catch and no picker opens.
+        restrictBeforeShare();
+        const pub = await localParticipant.setScreenShareEnabled(
+          true,
+          {
+            // Tab audio is never captured: the caller is already on a voice call and
+            // publishing their tab's audio would echo it back into the room.
+            audio: false,
+            video: { displaySurface: preferredSurface(allowedSurfaces) },
+            contentHint: 'text',
+            selfBrowserSurface: 'exclude',
+            surfaceSwitching: 'include',
+            // Screen content is mostly static, so a low frame rate costs the agent nothing
+            // and leaves far more headroom for the audio the call actually depends on.
+            //
+            // Omitted entirely on Safari: livekit-client documents that on Safari 17,
+            // "specifying any resolution at all would lead to a low-resolution capture"
+            // (WebKit bug 263015), and its own default is already uncapped there. A
+            // low-resolution capture makes on-screen text unreadable, which is the whole
+            // point of the feature — worth more than the frame-rate hint.
+            ...(isSafari() ? {} : { resolution: { width: 1920, height: 1080, frameRate: 3 } }),
+          },
+          {
+            // Audio wins the uplink: the screen is low priority, capped, and may drop
+            // resolution before frame rate. (`screenShareEncoding`, not `videoEncoding`:
+            // livekit-client ignores the latter for screen tracks.)
+            screenShareEncoding: { maxBitrate: 1_500_000, maxFramerate: 3, priority: 'low' },
+            degradationPreference: 'balanced',
+          }
+        );
         if (!pub)
           return { v: SCREENSHARE_PROTOCOL_VERSION, result: 'failed', reason: 'no_publication' };
+        // The picker cannot be restricted, so the pick is checked after the fact.
+        // shortcut: Safari/Firefox report no displaySurface, so those picks cannot be verified and are allowed.
+        const picked = surfaceOf(pub);
+        if (picked && !allowedSurfaces.includes(picked)) {
+          rejectingPickRef.current = true;
+          try {
+            await localParticipant.setScreenShareEnabled(false);
+          } finally {
+            rejectingPickRef.current = false;
+          }
+          return {
+            v: SCREENSHARE_PROTOCOL_VERSION,
+            result: 'cancelled',
+            reason: 'surface_not_allowed',
+          };
+        }
         return {
           v: SCREENSHARE_PROTOCOL_VERSION,
           result: 'granted',
@@ -286,9 +354,12 @@ export function useScreenshareSession(
         // The caller dismissed the picker. That is a decision, not a fault.
         const result = name === 'NotAllowedError' ? 'cancelled' : 'failed';
         return { v: SCREENSHARE_PROTOCOL_VERSION, result, reason: name };
+      } finally {
+        // Ends this start's pre-publish restriction; a published screen keeps its own.
+        shareStartEnded();
       }
     },
-    [room]
+    [shareStartEnded, restrictBeforeShare, room]
   );
 
   const stopShare = useCallback(
@@ -317,6 +388,7 @@ export function useScreenshareSession(
     },
     [room]
   );
+  stopShareRef.current = stopShare;
 
   /** Caller-initiated share, with no agent request outstanding. */
   const startShare = useCallback(async (): Promise<RequestConsentResponse> => {
@@ -410,6 +482,16 @@ export function useScreenshareSession(
       const respond = (response: RequestConsentResponse) => JSON.stringify(response);
       const payload = parsePayload(data?.payload);
 
+      // R39: only the Telzino agent may ask. Staff hold data permission and could otherwise
+      // put the agent's consent prompt in front of the caller themselves.
+      if (!isAgentParticipant(room.remoteParticipants.get(data?.callerIdentity ?? ''))) {
+        return respond({
+          v: SCREENSHARE_PROTOCOL_VERSION,
+          result: 'failed',
+          reason: 'not_permitted',
+        });
+      }
+
       if (!isCurrentVersion(payload)) {
         // A mismatched peer is refused rather than guessed at.
         return respond({
@@ -477,12 +559,19 @@ export function useScreenshareSession(
         });
       });
     },
-    [capable, settle]
+    [capable, room, settle]
   );
 
   // Agent -> widget: "stop sharing".
   const handleStop = useCallback(
     async (data: RpcInvocationData): Promise<string> => {
+      // R39: refused before anything is touched, so a non-agent cannot end the caller's share.
+      if (!isAgentParticipant(room.remoteParticipants.get(data?.callerIdentity ?? ''))) {
+        throw new RpcError(
+          RpcError.ErrorCode.APPLICATION_ERROR,
+          'screenshare.stop: caller is not the agent'
+        );
+      }
       const versionOk = isCurrentVersion(parsePayload(data?.payload));
 
       // A prompt still on screen means no share ever started. Close it and tell the agent
@@ -518,7 +607,7 @@ export function useScreenshareSession(
       const response: StopResponse = { v: SCREENSHARE_PROTOCOL_VERSION, stopped: true };
       return JSON.stringify(response);
     },
-    [settle, stopShare]
+    [room, settle, stopShare]
   );
 
   // A4: the capability attribute (ATTR_CAPABLE) used to be published from here via
@@ -546,16 +635,18 @@ export function useScreenshareSession(
 
     register(RPC_REQUEST_CONSENT, handleRequestConsent);
     register(RPC_STOP, handleStop);
+    register(RPC_TAKEOVER_REQUEST_VIEWER_CONSENT, handleViewerConsent);
 
     return () => {
       try {
         room.unregisterRpcMethod(RPC_REQUEST_CONSENT);
         room.unregisterRpcMethod(RPC_STOP);
+        room.unregisterRpcMethod(RPC_TAKEOVER_REQUEST_VIEWER_CONSENT);
       } catch (err) {
         console.warn('[screenshare] could not unregister the RPC handlers', err);
       }
     };
-  }, [room, handleRequestConsent, handleStop]);
+  }, [room, handleRequestConsent, handleStop, handleViewerConsent]);
 
   // The browser's own "Stop sharing" bar ends the share without going through this hook.
   // Track publication state is the source of truth, and this is the only place a stop is
@@ -577,6 +668,9 @@ export function useScreenshareSession(
         return;
       }
       setIsSharing(false);
+      if (rejectingPickRef.current) {
+        return;
+      }
       const reason = stopReasonRef.current ?? 'browser_stop';
       stopReasonRef.current = null;
       onStoppedRef.current?.(reason);
@@ -762,7 +856,15 @@ export function useScreenshareSession(
     // start a share nobody is listening for, producing a screen track against no consent
     // record at all.
     canShare: enabled && capable && agentReady,
+    // The agent may use screen sharing but this browser cannot: the widget offers a photo.
+    // The worker never widens the publish permission for a browser that cannot capture, so
+    // the agent's attribute (agentReady) is the signal here, not `enabled`.
+    shareUnsupported: !capable && agentReady,
+    agentIdentity,
     consentRequest,
+    viewerConsentRequest,
+    allowViewer,
+    denyViewer,
     acceptConsent,
     declineConsent,
     startShare,
