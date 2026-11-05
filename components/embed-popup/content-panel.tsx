@@ -161,7 +161,7 @@ export function ContentPanel({ className }: { className?: string }) {
             if (e.key === 'Escape') close();
           }}
           className={cn(
-            'bg-background border-separator1 dark:border-separator2 absolute inset-x-2 bottom-16 z-20 flex max-h-[70%] flex-col gap-2 rounded-2xl border p-3 drop-shadow-lg',
+            'bg-embed-bg border-separator1 dark:border-separator2 absolute inset-x-2 bottom-16 z-20 flex max-h-[70%] flex-col gap-2 rounded-2xl border p-3 drop-shadow-lg',
             className
           )}
         >

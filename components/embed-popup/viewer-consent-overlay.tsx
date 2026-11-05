@@ -76,7 +76,7 @@ export function ViewerConsentOverlay({
       aria-describedby="viewer-consent-detail"
       tabIndex={-1}
       onKeyDown={handleKeyDown}
-      className="bg-background/98 absolute inset-0 z-30 flex flex-col justify-center gap-3 rounded-[28px] p-5 outline-none"
+      className="bg-embed-bg absolute inset-0 z-30 flex flex-col justify-center gap-3 rounded-[28px] p-5 outline-none"
     >
       <h2 id="viewer-consent-title" className="text-fg1 text-base font-semibold">
         Allow {who} to see your screen?

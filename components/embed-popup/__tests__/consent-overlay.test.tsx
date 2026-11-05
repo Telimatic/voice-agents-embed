@@ -28,6 +28,13 @@ function renderOverlay(props: Partial<React.ComponentProps<typeof ConsentOverlay
 }
 
 describe('ConsentOverlay', () => {
+  it('has its own solid fill, so the call screen never shows through it', () => {
+    // Inside the iframe --background is transparent (theme-provider); --embed-bg is the widget's fill.
+    renderOverlay();
+    expect(screen.getByRole('dialog').className).toContain('bg-embed-bg');
+    expect(screen.getByRole('dialog').className).not.toMatch(/bg-background/);
+  });
+
   it('names the agent asking', () => {
     renderOverlay();
     expect(screen.getByRole('dialog')).toHaveTextContent(/Linda would like to see your screen/i);

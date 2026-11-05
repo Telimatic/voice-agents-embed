@@ -25,6 +25,13 @@ function renderOverlay(name = 'Dana', role: 'rep' | 'observer' = 'rep', containe
 }
 
 describe('ViewerConsentOverlay', () => {
+  it('has its own solid fill, so the call screen never shows through it', () => {
+    // Inside the iframe --background is transparent (theme-provider); --embed-bg is the widget's fill.
+    renderOverlay();
+    expect(screen.getByRole('dialog').className).toContain('bg-embed-bg');
+    expect(screen.getByRole('dialog').className).not.toMatch(/bg-background/);
+  });
+
   it('names the team member and takes focus', () => {
     renderOverlay();
     const dialog = screen.getByRole('dialog');
