@@ -248,7 +248,7 @@ describe('web call session token (TLZ-742) — session id into room metadata, se
     assertResponse(res);
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data.roomName).toMatch(new RegExp(`^agent-${AGENT}-\\d+$`));
+    expect(data.roomName).toMatch(new RegExp(`^agent-${AGENT}-\\d+-[0-9a-f]{8}$`));
     const config = roomConfigOf(data.participantToken);
     expect(JSON.parse(config?.metadata ?? '{}')).toEqual({ telzino_web_call_session: SESSION });
     // No explicit dispatch: unnamed workers still get the job through LiveKit's default dispatch.
@@ -356,7 +356,24 @@ describe('web call session token (TLZ-742) — session id into room metadata, se
     const res = await POST(postRequest({ agentId: 'agent-1' }, { origin: ORIGIN }));
     assertResponse(res);
     const data = await res.json();
-    expect(data.roomName).toMatch(/^agent-agent-1-\d+$/);
+    expect(data.roomName).toMatch(/^agent-agent-1-\d+-[0-9a-f]{8}$/);
     expect(roomConfigOf(data.participantToken)?.metadata ?? '').toBe('');
+  });
+
+  it('gives two calls made in the same millisecond different rooms', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+    try {
+      const rooms = await Promise.all(
+        [1, 2].map(async () => {
+          const res = await POST(postRequest({ agentId: 'agent-1' }, { origin: ORIGIN }));
+          assertResponse(res);
+          return (await res.json()).roomName as string;
+        })
+      );
+      expect(rooms[0]).toMatch(/^agent-agent-1-1800000000000-[0-9a-f]{8}$/);
+      expect(rooms[1]).not.toBe(rooms[0]);
+    } finally {
+      now.mockRestore();
+    }
   });
 });

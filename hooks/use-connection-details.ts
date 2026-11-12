@@ -95,7 +95,9 @@ export default function useConnectionDetails(
   ]);
 
   useEffect(() => {
-    fetchConnectionDetails();
+    // A background fetch: a refusal (e.g. an expired TLZ-742 session token) is already logged
+    // above, and whoever starts the call fetches again and shows the error.
+    fetchConnectionDetails().catch(() => {});
   }, [fetchConnectionDetails]);
 
   const isConnectionDetailsExpired = useCallback(() => {

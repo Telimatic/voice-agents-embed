@@ -47,7 +47,8 @@ function AgentClient({ appConfig }: EmbedFixedAgentClientProps) {
   useEffect(() => {
     const onDisconnected = () => {
       setPopupOpen(false);
-      refreshConnectionDetails();
+      // Background refresh: the next Call fetches again and shows any refusal.
+      refreshConnectionDetails().catch(() => {});
     };
     const onMediaDevicesError = (error: Error) => {
       setError({

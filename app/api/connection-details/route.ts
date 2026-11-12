@@ -101,12 +101,15 @@ export async function POST(req: Request) {
     const clientIp = clientIpFromHeaders(req.headers);
     const participantIdentity = `embed_user_${Date.now()}_${Math.floor(Math.random() * 10_000)}`;
 
-    // Room name format: agent-{agentId}-{timestamp}
-    // This format is required for the agent service to recognize and join the room
+    // Room name format: agent-{agentId}-{timestamp}-{random}
+    // The agent service reads the agent id from the start of the name. The random part keeps
+    // two calls made in the same millisecond out of one room: a shared room would give the
+    // second visitor the first call's web call session (TLZ-742).
     const timestamp = Date.now();
+    const roomSuffix = `${timestamp}-${crypto.randomUUID().slice(0, 8)}`;
     const roomName = agentId
-      ? `agent-${agentId}-${timestamp}`
-      : `voice_assistant_room_${timestamp}`;
+      ? `agent-${agentId}-${roomSuffix}`
+      : `voice_assistant_room_${roomSuffix}`;
 
     const participantToken = await createParticipantToken(
       { identity: participantIdentity, name: participantName },
