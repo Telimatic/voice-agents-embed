@@ -12,6 +12,12 @@ export interface AppConfig {
   agentId?: string;
   agentName?: string;
   connectionDetailsEndpoint?: string;
+  /**
+   * TLZ-742. The current web call session token (popup: the script tag's data-session-token).
+   * Read on every connection fetch, so a partner page can swap in a fresh token (they last 5
+   * minutes) before the visitor presses Call.
+   */
+  getSessionToken?: () => string | undefined;
 
   supportsChatInput: boolean;
   supportsVideoInput: boolean;

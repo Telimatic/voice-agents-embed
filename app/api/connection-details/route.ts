@@ -3,6 +3,11 @@ import { AccessToken, type AccessTokenOptions, type VideoGrant } from 'livekit-s
 import { RoomConfiguration, TrackSource } from '@livekit/protocol';
 import { ATTR_CLIENT_IP, clientIpFromHeaders } from '@/lib/client-ip';
 import { ATTR_CAPABLE, ATTR_DISPLAY_CAPABLE } from '@/lib/screenshare-protocol';
+import {
+  ROOM_METADATA_SESSION_KEY,
+  WebCallSessionTokenError,
+  verifyWebCallSessionToken,
+} from '@/lib/web-call-session-token';
 
 // NOTE: you are expected to define the following environment variables in `.env.local`:
 const API_KEY = process.env.LIVEKIT_API_KEY;
@@ -19,6 +24,19 @@ export type ConnectionDetails = {
   participantToken: string;
 };
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Sandbox-Id',
+};
+
+function refuse(status: number, body: Record<string, string>) {
+  return NextResponse.json(body, {
+    status,
+    headers: { 'Cache-Control': 'no-store', ...CORS_HEADERS },
+  });
+}
+
 export async function POST(req: Request) {
   try {
     if (LIVEKIT_URL === undefined) {
@@ -33,8 +51,42 @@ export async function POST(req: Request) {
 
     // Parse agent configuration from request body
     const body = await req.json();
-    const agentId: string = body?.agentId;
+    let agentId: string = body?.agentId;
     const agentName: string = body?.room_config?.agents?.[0]?.agent_name;
+
+    // TLZ-742: a web call session. The partner's server saved this call's business details in
+    // the Dashboard and handed its page a 5-minute token naming the session, the agent and
+    // the website the call may start from. The browser's Origin header must be that website.
+    // Only the session id goes on: into the room metadata, which only the token's minter can
+    // write, where the worker reads it at job start and fetches the details server-side.
+    let webCallSessionId: string | null = null;
+    if (body?.sessionToken !== undefined && body?.sessionToken !== null) {
+      const secret = process.env.WEB_CALL_SESSION_TOKEN_SECRET;
+      if (!secret) {
+        console.error('WEB_CALL_SESSION_TOKEN_SECRET is not defined');
+        return refuse(500, { error: 'web_call_sessions_not_configured' });
+      }
+      try {
+        const verified = await verifyWebCallSessionToken(
+          body.sessionToken,
+          req.headers.get('origin'),
+          secret
+        );
+        if (
+          agentId &&
+          (typeof agentId !== 'string' || agentId.toLowerCase() !== verified.agentId.toLowerCase())
+        ) {
+          return refuse(400, { error: 'agent_mismatch' });
+        }
+        agentId = verified.agentId;
+        webCallSessionId = verified.sessionId;
+      } catch (error) {
+        if (error instanceof WebCallSessionTokenError) {
+          return refuse(401, { error: 'invalid_session_token', reason: error.code });
+        }
+        throw error;
+      }
+    }
 
     // Generate participant token
     const participantName = body?.participantName || 'Guest';
@@ -49,12 +101,15 @@ export async function POST(req: Request) {
     const clientIp = clientIpFromHeaders(req.headers);
     const participantIdentity = `embed_user_${Date.now()}_${Math.floor(Math.random() * 10_000)}`;
 
-    // Room name format: agent-{agentId}-{timestamp}
-    // This format is required for the agent service to recognize and join the room
+    // Room name format: agent-{agentId}-{timestamp}-{random}
+    // The agent service reads the agent id from the start of the name. The random part keeps
+    // two calls made in the same millisecond out of one room: a shared room would give the
+    // second visitor the first call's web call session (TLZ-742).
     const timestamp = Date.now();
+    const roomSuffix = `${timestamp}-${crypto.randomUUID().slice(0, 8)}`;
     const roomName = agentId
-      ? `agent-${agentId}-${timestamp}`
-      : `voice_assistant_room_${timestamp}`;
+      ? `agent-${agentId}-${roomSuffix}`
+      : `voice_assistant_room_${roomSuffix}`;
 
     const participantToken = await createParticipantToken(
       { identity: participantIdentity, name: participantName },
@@ -62,7 +117,8 @@ export async function POST(req: Request) {
       capable,
       displayCapable,
       clientIp,
-      agentName
+      agentName,
+      webCallSessionId
     );
 
     // Return connection details
@@ -75,9 +131,7 @@ export async function POST(req: Request) {
 
     const headers = new Headers({
       'Cache-Control': 'no-store',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, X-Sandbox-Id',
+      ...CORS_HEADERS,
     });
     return NextResponse.json(data, { headers });
   } catch (error) {
@@ -90,13 +144,7 @@ export async function POST(req: Request) {
 
 // Handle CORS preflight
 export async function OPTIONS() {
-  return new NextResponse(null, {
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, X-Sandbox-Id',
-    },
-  });
+  return new NextResponse(null, { headers: CORS_HEADERS });
 }
 
 function createParticipantToken(
@@ -105,7 +153,8 @@ function createParticipantToken(
   capable: boolean,
   displayCapable: boolean,
   clientIp: string | null,
-  agentName?: string
+  agentName?: string,
+  webCallSessionId?: string | null
 ): Promise<string> {
   const at = new AccessToken(API_KEY, API_SECRET, {
     ...userInfo,
@@ -153,9 +202,14 @@ function createParticipantToken(
   };
   at.addGrant(grant);
 
-  if (agentName) {
+  // TLZ-742: the session id rides in the room metadata. With no agents listed, LiveKit still
+  // makes its default dispatch, so unnamed (automatically dispatched) workers get the job.
+  if (agentName || webCallSessionId) {
     at.roomConfig = new RoomConfiguration({
-      agents: [{ agentName }],
+      ...(agentName ? { agents: [{ agentName }] } : {}),
+      ...(webCallSessionId
+        ? { metadata: JSON.stringify({ [ROOM_METADATA_SESSION_KEY]: webCallSessionId }) }
+        : {}),
     });
   }
 

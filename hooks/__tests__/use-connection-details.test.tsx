@@ -65,3 +65,65 @@ describe('useConnectionDetails capable flag (TLZ-561)', () => {
     expect((await bodySent(fetchMock)).displayCapable).toBe(false);
   });
 });
+
+describe('useConnectionDetails session token (TLZ-742)', () => {
+  function bodyOf(fetchMock: ReturnType<typeof stubFetch>, call = 0) {
+    const init = fetchMock.mock.calls[call][1] as { body: string };
+    return JSON.parse(init.body);
+  }
+
+  it('sends the session token, read fresh on every fetch', async () => {
+    stubNavigator({ capable: true });
+    const fetchMock = stubFetch();
+    let current = 'token-1';
+    const config = { ...APP_CONFIG, getSessionToken: () => current } as AppConfig;
+    const { result } = renderHook(() => useConnectionDetails(config));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(bodyOf(fetchMock).sessionToken).toBe('token-1');
+
+    // The partner page swapped in a fresh token before the visitor pressed Call.
+    current = 'token-2';
+    await result.current.refreshConnectionDetails();
+    expect(bodyOf(fetchMock, fetchMock.mock.calls.length - 1).sessionToken).toBe('token-2');
+  });
+
+  it('sends no session token without one', async () => {
+    stubNavigator({ capable: true });
+    const fetchMock = stubFetch();
+    renderHook(() => useConnectionDetails(APP_CONFIG));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(bodyOf(fetchMock)).not.toHaveProperty('sessionToken');
+  });
+
+  it('rejects with the reason when the widget refuses the token', async () => {
+    stubNavigator({ capable: true });
+    const fetchMock = stubFetch();
+    const config = { ...APP_CONFIG, getSessionToken: () => 'stale' } as AppConfig;
+    const { result } = renderHook(() => useConnectionDetails(config));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    fetchMock.mockResolvedValueOnce({
+      json: async () => ({ error: 'invalid_session_token', reason: 'expired' }),
+    });
+    await expect(result.current.refreshConnectionDetails()).rejects.toThrow(/expired/);
+  });
+
+  it('does not leave an unhandled rejection when the first, background fetch is refused', async () => {
+    stubNavigator({ capable: true });
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const fetchMock = stubFetch();
+      fetchMock.mockResolvedValueOnce({
+        json: async () => ({ error: 'invalid_session_token', reason: 'expired' }),
+      });
+      const config = { ...APP_CONFIG, getSessionToken: () => 'stale' } as AppConfig;
+      const { result } = renderHook(() => useConnectionDetails(config));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(result.current.connectionDetails).toBeNull();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+});
